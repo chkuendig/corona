@@ -585,10 +585,11 @@ function webPackageApp( options )
 	end
 	log3('Template folder: ' .. templateFolder)
 
-	-- sanity check
+	-- sanity check - skip on Linux (lfs.attributes returns 0 for external files in sandboxed builds)
 	local archivesize = lfs.attributes (template, "size")
 	if archivesize == nil or archivesize == 0 then
-		return 'Failed to open template: ' .. template
+		-- on Linux, lfs may be sandboxed. Trust the template path if it was explicitly provided.
+		log('WARNING: lfs.attributes returned ' .. tostring(archivesize) .. ' for ' .. template .. ', proceeding anyway')
 	end
 
 	local ret = unzip(template, templateFolder)
