@@ -196,6 +196,19 @@ namespace Rtt
 			return false;
 
 		Format fmt = bitmap->GetFormat();
+
+		// A captured frame is tagged kBGRA, but GPUStream::CaptureFrameBuffer reads it
+		// with GL_BGRA + GL_UNSIGNED_INT_8_8_8_8 — a packed type, so the components land
+		// in memory as A,R,G,B on a little-endian machine. The writers below take byte
+		// order, so tell them the order the buffer actually has, or the saved image comes
+		// back with red and green traded and blue taken from the alpha byte.
+#ifndef Rtt_BIG_ENDIAN
+		if (fmt == PlatformBitmap::kBGRA)
+		{
+			fmt = PlatformBitmap::kARGB;
+		}
+#endif
+
 		bool rc = false;
 
 		std::string path = filePath;

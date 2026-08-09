@@ -163,9 +163,26 @@ namespace bitmapUtil
 			break;
 		}
 		case Rtt::PlatformBitmap::Format::kABGR:
-		case Rtt::PlatformBitmap::Format::kARGB:
 			Rtt_ASSERT(0); //todo
 			break;
+
+		case Rtt::PlatformBitmap::Format::kARGB:
+		{
+			// convert to RGB
+			rgb.reset((uint8_t*)malloc(width * height * 3));
+			uint8_t* src = data;
+			uint8_t* dst = rgb.get();
+			for (int i = 0; i < width * height; i++)
+			{
+				dst[0] = src[1];
+				dst[1] = src[2];
+				dst[2] = src[3];
+				dst += 3;
+				src += 4;
+			}
+			data = rgb.get();
+			break;
+		}
 
 		case Rtt::PlatformBitmap::Format::kBGRA:
 		{
@@ -386,6 +403,24 @@ namespace bitmapUtil
 				dst[1] = src[1];
 				dst[2] = src[0];
 				dst[3] = src[3];
+				dst += 4;
+				src += 4;
+			}
+			data = rgba;
+			free_data = true;
+		}
+		else if (format == Rtt::PlatformBitmap::Format::kARGB)
+		{
+			// ARGB ==> RGBA
+			U8* rgba = (U8*)malloc(width * height * 4);
+			U8* src = data;
+			U8* dst = rgba;
+			for (int i = 0; i < width * height; i++)
+			{
+				dst[0] = src[1];
+				dst[1] = src[2];
+				dst[2] = src[3];
+				dst[3] = src[0];
 				dst += 4;
 				src += 4;
 			}
