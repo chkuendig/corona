@@ -137,13 +137,13 @@ namespace bitmapUtil
 		jpeg_stdio_dest(&cinfo, outfile);
 		cinfo.image_width = width;
 		cinfo.image_height = height;
-		jpeg_set_quality(&cinfo, Rtt::Clamp((int)(jpegQuality * 100), 1, 100), TRUE);
 
 		row_stride = width * 3; // JSAMPLEs per row in image_buffer 
 		cinfo.input_components = 3;       // # of color components per pixel 
 		cinfo.in_color_space = JCS_RGB;       // colorspace of input image 
 
 		jpeg_set_defaults(&cinfo);
+		jpeg_set_quality(&cinfo, Rtt::Clamp((int)(jpegQuality * 100), 1, 100), TRUE);
 		jpeg_start_compress(&cinfo, TRUE);
 
 		std::unique_ptr<uint8_t[]> rgb;
