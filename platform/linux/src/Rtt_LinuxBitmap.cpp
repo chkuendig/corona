@@ -225,12 +225,12 @@ namespace Rtt
 		Format fmt = bitmap->GetFormat();
 		bool rc = false;
 
-		std::string path = filePath;
-		if (path.rfind(".png") != std::string::npos)
+		std::string ext = LowercaseExtension(filePath);
+		if (ext == ".png")
 		{
 			rc = bitmapUtil::savePNG(filePath, bits, w, h, fmt);
 		}
-		else if (path.rfind(".jpg") != std::string::npos)
+		else if (ext == ".jpg" || ext == ".jpeg")
 		{
 			rc = bitmapUtil::saveJPG(filePath, bits, w, h, fmt, jpegQuality);
 		}
