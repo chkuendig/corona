@@ -17,9 +17,37 @@
 #include "Display/Rtt_Display.h"
 #include "Core/Rtt_Types.h"
 #include "Rtt_BitmapUtils.h"
+#include <cctype>
+#include <cstring>
 
 namespace Rtt
 {
+	namespace
+	{
+		// The extension after the last dot, lowercased, so that ".JPEG" is
+		// recognised as well as ".jpeg". Empty when the path carries no extension.
+		std::string LowercaseExtension(const char *path)
+		{
+			if (path == NULL)
+			{
+				return std::string();
+			}
+
+			const char *dot = strrchr(path, '.');
+			if (dot == NULL || dot[1] == '\0')
+			{
+				return std::string();
+			}
+
+			std::string ext(dot);
+			for (size_t i = 0; i < ext.size(); i++)
+			{
+				ext[i] = (char)tolower((unsigned char)ext[i]);
+			}
+			return ext;
+		}
+	}
+
 	// LinuxBaseBitmap
 	LinuxBaseBitmap::LinuxBaseBitmap()
 		: Super(), fData(NULL), fWidth(0), fHeight(0), fFormat(kUndefined), fProperties(0)
@@ -111,13 +139,12 @@ namespace Rtt
 		Rtt_ASSERT(fData == NULL);
 
 		// get file ext
-		int n = strlen(path);
-		if (n < 5)
+		std::string ext = LowercaseExtension(path);
+		if (ext.empty())
 		{
 			return false;
 		}
 
-		std::string ext = path + n - 4;
 		if (ext == ".bmp")
 		{
 			fData = bitmapUtil::loadBMP(path, fWidth, fHeight, fFormat);
@@ -139,7 +166,7 @@ namespace Rtt
 				fclose(f);
 			}
 		}
-		else if (ext == ".jpg")
+		else if (ext == ".jpg" || ext == ".jpeg")
 		{
 			FILE* f = fopen(path, "rb");
 			if (f)
