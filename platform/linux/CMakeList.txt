@@ -925,6 +925,7 @@ add_executable( Solar2DSimulator
 	${CORONA_ROOT}/platform/linux/src/Rtt_LinuxDialog.cpp
 	${CORONA_ROOT}/platform/linux/src/Rtt_LinuxDialogBuild.cpp
 	${CORONA_ROOT}/platform/linux/src/Rtt_LinuxContext.cpp
+	${CORONA_ROOT}/platform/linux/src/Rtt_LinuxVideoTap.cpp
 	${CORONA_ROOT}/platform/linux/src/Rtt_LinuxAudioRecorder.cpp
 	${CORONA_ROOT}/platform/linux/src/Rtt_LinuxBitmap.cpp
 	${CORONA_ROOT}/platform/linux/src/Rtt_LinuxData.cpp

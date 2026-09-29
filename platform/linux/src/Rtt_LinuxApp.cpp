@@ -15,6 +15,10 @@
 #include "Rtt_LuaContext.h"
 #include "Core/Rtt_Types.h"
 #include "Rtt_LinuxApp.h"
+
+#ifdef Rtt_SIMULATOR
+#include "Rtt_LinuxVideoTap.h"
+#endif
 #include "Rtt_LinuxPlatform.h"
 #include "Rtt_LinuxRuntimeDelegate.h"
 #include "Rtt_LuaFile.h"
@@ -57,6 +61,9 @@ namespace Rtt
 		, fWindow(NULL)
 		, fImCtx(NULL)
 		, fActivityIndicator(false)
+#ifdef Rtt_SIMULATOR
+		, fVideoTap(NULL)
+#endif
 	{
 		fMouse = new LinuxMouseListener();
 	}
@@ -64,6 +71,11 @@ namespace Rtt
 	SolarApp::~SolarApp()
 	{
 		fContext = NULL;
+#ifdef Rtt_SIMULATOR
+		// Before ImGui/GL teardown: the tap's staging path touches GL.
+		delete fVideoTap;
+		fVideoTap = NULL;
+#endif
 		curl_global_cleanup();
 
 		// Cleanup
@@ -121,11 +133,70 @@ namespace Rtt
 		const char* glsl_version = "#version 130";
 		ImGui_ImplOpenGL3_Init(glsl_version);
 
+#ifdef Rtt_SIMULATOR
+		// Opt-in frame tap for headless capture. NULL unless
+		// SOLAR2D_VIDEO_PIPE was set and every path check passed.
+		fVideoTap = LinuxVideoTap::Create();
+#endif
+
 		return true;
 	}
 
-	void SolarApp::SetIcon()
+#ifdef Rtt_SIMULATOR
+	bool SolarApp::RecreateWindowForOffscreen(int w, int h)
 	{
+		// Only relevant under the offscreen driver: SDL sizes its EGL pbuffer
+		// once, at window creation, and implements no resize for it, so the
+		// window created at 0x0 would leave the default framebuffer at 1x1
+		// forever. Recreating the window (and with it the GL context) at the
+		// target size is the only way to grow the surface. On every other
+		// driver this returns false and the caller uses SDL_SetWindowSize.
+		const char* driver = SDL_getenv("SDL_VIDEODRIVER");
+		if (!driver || strcmp(driver, "offscreen") != 0)
+		{
+			return false;
+		}
+
+		if (fWindow)
+		{
+			int currentW = 0, currentH = 0;
+			SDL_GetWindowSize(fWindow, &currentW, &currentH);
+			if (currentW == w && currentH == h)
+			{
+				return true;
+			}
+		}
+
+		if (fImCtx)
+		{
+			ImGui_ImplOpenGL3_Shutdown();
+			ImGui_ImplSDL2_Shutdown();
+		}
+		SDL_GL_DeleteContext(fGLcontext);
+		if (fWindow)
+		{
+			SDL_DestroyWindow(fWindow);
+		}
+
+		uint32_t windowStyle = SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI;
+		fWindow = SDL_CreateWindow("", 0, 0, w, h, windowStyle);
+		fGLcontext = SDL_GL_CreateContext(fWindow);
+		SDL_GL_MakeCurrent(fWindow, fGLcontext);
+		SDL_GL_SetSwapInterval(1);
+
+		ImGui_ImplSDL2_InitForOpenGL(fWindow, fGLcontext);
+		ImGui_ImplOpenGL3_Init("#version 130");
+
+		// The context change invalidates every GL object the runtime owns;
+		// RestartRenderer() (which the caller runs next) rebuilds them. This
+		// runs during LoadApp, before project assets exist, on the common
+		// path — only a resize of a running app pays the rebuild.
+		Rtt_Log("offscreen window recreated at %dx%d\n", w, h);
+		return true;
+	}
+#endif // Rtt_SIMULATOR
+
+	void SolarApp::SetIcon()	{
 		int image_width = 0;
 		int image_height = 0;
 		string icon_path = GetStartupPath(NULL);
