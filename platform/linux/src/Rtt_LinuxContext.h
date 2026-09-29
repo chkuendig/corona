@@ -72,6 +72,10 @@ namespace Rtt
 		void Pause();
 		void Resume();
 		void RestartRenderer();
+		// The offscreen driver's window recreation (see SolarApp) hands the
+		// context the new SDL_Window*: everything from swaps to SetTitle uses
+		// the pointer, which the old window's destruction invalidated.
+		void SetWindow(SDL_Window* window) { fWindow = window; }
 		int GetFPS() const { return fRuntime ? fRuntime->GetFPS() : 30; }
 		int GetWidth() const;
 		void SetWidth(int val);

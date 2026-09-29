@@ -18,6 +18,7 @@
 
 #ifdef Rtt_SIMULATOR
 #include "Rtt_LinuxVideoTap.h"
+#include "Rtt_LinuxInputTap.h"
 #endif
 #include "Rtt_LinuxPlatform.h"
 #include "Rtt_LinuxRuntimeDelegate.h"
@@ -63,6 +64,7 @@ namespace Rtt
 		, fActivityIndicator(false)
 #ifdef Rtt_SIMULATOR
 		, fVideoTap(NULL)
+		, fInputTap(NULL)
 #endif
 	{
 		fMouse = new LinuxMouseListener();
@@ -75,6 +77,8 @@ namespace Rtt
 		// Before ImGui/GL teardown: the tap's staging path touches GL.
 		delete fVideoTap;
 		fVideoTap = NULL;
+		delete fInputTap;
+		fInputTap = NULL;
 #endif
 		curl_global_cleanup();
 
@@ -137,6 +141,9 @@ namespace Rtt
 		// Opt-in frame tap for headless capture. NULL unless
 		// SOLAR2D_VIDEO_PIPE was set and every path check passed.
 		fVideoTap = LinuxVideoTap::Create();
+		// Opt-in input injection, same conventions. NULL unless
+		// SOLAR2D_INPUT_PIPE was set.
+		fInputTap = LinuxInputTap::Create();
 #endif
 
 		return true;
@@ -148,9 +155,12 @@ namespace Rtt
 		// Only relevant under the offscreen driver: SDL sizes its EGL pbuffer
 		// once, at window creation, and implements no resize for it, so the
 		// window created at 0x0 would leave the default framebuffer at 1x1
-		// forever. Recreating the window (and with it the GL context) at the
-		// target size is the only way to grow the surface. On every other
-		// driver this returns false and the caller uses SDL_SetWindowSize.
+		// forever. A new window of the right size is created and the EXISTING
+		// GL context is re-bound to it — the context must survive, because
+		// every GL object the runtime owns (programs, textures) lives in it;
+		// destroying it would leave a simulator that renders its menu and
+		// nothing else. On every other driver this returns false and the
+		// caller uses SDL_SetWindowSize.
 		const char* driver = SDL_getenv("SDL_VIDEODRIVER");
 		if (!driver || strcmp(driver, "offscreen") != 0)
 		{
@@ -167,31 +177,38 @@ namespace Rtt
 			}
 		}
 
-		if (fImCtx)
+		uint32_t windowStyle = SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI;
+		SDL_Window* replacement = SDL_CreateWindow("", 0, 0, w, h, windowStyle);
+		if (!replacement)
 		{
-			ImGui_ImplOpenGL3_Shutdown();
-			ImGui_ImplSDL2_Shutdown();
+			Rtt_Log("offscreen window recreation failed: %s\n", SDL_GetError());
+			return false;
 		}
-		SDL_GL_DeleteContext(fGLcontext);
-		if (fWindow)
+		if (SDL_GL_MakeCurrent(replacement, fGLcontext) != 0)
 		{
-			SDL_DestroyWindow(fWindow);
+			Rtt_Log("could not move the GL context to the new offscreen window: %s\n", SDL_GetError());
+			SDL_DestroyWindow(replacement);
+			return false;
 		}
 
-		uint32_t windowStyle = SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI;
-		fWindow = SDL_CreateWindow("", 0, 0, w, h, windowStyle);
-		fGLcontext = SDL_GL_CreateContext(fWindow);
-		SDL_GL_MakeCurrent(fWindow, fGLcontext);
+		SDL_Window* old = fWindow;
+		fWindow = replacement;
+		// The live context (if any) still holds the destroyed window pointer.
+		if (fContext)
+		{
+			fContext->SetWindow(fWindow);
+		}
+		// ImGui's SDL backend tracks the window; the GL backend keeps its
+		// objects in the (unchanged) context and is left alone.
+		ImGui_ImplSDL2_Shutdown();
+		ImGui_ImplSDL2_InitForOpenGL(fWindow, fGLcontext);
+		if (old)
+		{
+			SDL_DestroyWindow(old);
+		}
 		SDL_GL_SetSwapInterval(1);
 
-		ImGui_ImplSDL2_InitForOpenGL(fWindow, fGLcontext);
-		ImGui_ImplOpenGL3_Init("#version 130");
-
-		// The context change invalidates every GL object the runtime owns;
-		// RestartRenderer() (which the caller runs next) rebuilds them. This
-		// runs during LoadApp, before project assets exist, on the common
-		// path — only a resize of a running app pays the rebuild.
-		Rtt_Log("offscreen window recreated at %dx%d\n", w, h);
+		Rtt_Log("offscreen window resized to %dx%d\n", w, h);
 		return true;
 	}
 #endif // Rtt_SIMULATOR
@@ -266,6 +283,14 @@ namespace Rtt
 
 	bool SolarApp::PollEvents()
 	{
+#ifdef Rtt_SIMULATOR
+		// Inject queued input commands as real SDL events before polling, so
+		// they flow through the same listener/hit-testing path as a mouse.
+		if (fInputTap && fContext && fContext->GetRuntime())
+		{
+			fInputTap->DispatchPending(&fContext->GetRuntime()->GetDisplay(), GetMenuHeight(), SDL_GetWindowID(fWindow));
+		}
+#endif
 		vector<SDL_Event> events;
 		SDL_Event evt;
 		while (SDL_PollEvent(&evt))

@@ -82,6 +82,7 @@ namespace Rtt
 
 #ifdef Rtt_SIMULATOR
 	class LinuxVideoTap;
+	class LinuxInputTap;
 #endif
 
 	struct SolarApp : public ref_counted
@@ -104,6 +105,7 @@ namespace Rtt
 
 #ifdef Rtt_SIMULATOR
 		LinuxVideoTap* GetVideoTap() const { return fVideoTap; }
+		LinuxInputTap* GetInputTap() const { return fInputTap; }
 		// Under SDL's offscreen driver the EGL pbuffer is sized once at window
 		// creation and SDL_SetWindowSize cannot change it. This recreates the
 		// window and GL context at the target size; returns false on every
@@ -157,6 +159,7 @@ namespace Rtt
 		SDL_GLContext fGLcontext;
 #ifdef Rtt_SIMULATOR
 		LinuxVideoTap* fVideoTap;
+		LinuxInputTap* fInputTap;
 #endif
 
 		std::string fResourceDir;
