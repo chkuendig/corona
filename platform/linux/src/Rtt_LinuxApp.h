@@ -107,9 +107,11 @@ namespace Rtt
 		LinuxVideoTap* GetVideoTap() const { return fVideoTap; }
 		LinuxInputTap* GetInputTap() const { return fInputTap; }
 		// Under SDL's offscreen driver the EGL pbuffer is sized once at window
-		// creation and SDL_SetWindowSize cannot change it. This recreates the
-		// window and GL context at the target size; returns false on every
-		// other driver (caller should SDL_SetWindowSize instead).
+		// creation and SDL_SetWindowSize cannot change it. This swaps in a new
+		// window of the target size and re-binds the EXISTING GL context to
+		// it (the context must survive — the runtime's GL objects live in
+		// it); returns false on every other driver (caller should
+		// SDL_SetWindowSize instead).
 		bool RecreateWindowForOffscreen(int w, int h);
 #endif
 

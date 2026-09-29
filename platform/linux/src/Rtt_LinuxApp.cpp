@@ -161,7 +161,7 @@ namespace Rtt
 		// destroying it would leave a simulator that renders its menu and
 		// nothing else. On every other driver this returns false and the
 		// caller uses SDL_SetWindowSize.
-		const char* driver = SDL_getenv("SDL_VIDEODRIVER");
+		const char* driver = SDL_GetCurrentVideoDriver();
 		if (!driver || strcmp(driver, "offscreen") != 0)
 		{
 			return false;
@@ -212,8 +212,7 @@ namespace Rtt
 		return true;
 	}
 #endif // Rtt_SIMULATOR
-
-	void SolarApp::SetIcon()	{
+	void SolarApp::SetIcon() {
 		int image_width = 0;
 		int image_height = 0;
 		string icon_path = GetStartupPath(NULL);
