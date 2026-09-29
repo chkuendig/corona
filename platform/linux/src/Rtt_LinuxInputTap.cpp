@@ -78,15 +78,17 @@ namespace Rtt
 		{
 			fReader.join();
 		}
+		// The marker and lock belong to whoever holds the flock — a tap whose
+		// Start() failed must not delete the live tap's files.
 		if (fLockFd >= 0)
 		{
 			flock(fLockFd, LOCK_UN);
 			close(fLockFd);
+			std::string ready = fFifoPath + ".ready";
+			unlink(ready.c_str());
+			std::string lock = fFifoPath + ".lock";
+			unlink(lock.c_str());
 		}
-		std::string ready = fFifoPath + ".ready";
-		unlink(ready.c_str());
-		std::string lock = fFifoPath + ".lock";
-		unlink(lock.c_str());
 	}
 
 	bool LinuxInputTap::Start()
@@ -162,12 +164,23 @@ namespace Rtt
 
 			// Park until a writer appears, then drain lines until it leaves
 			// (read == 0). EOF is normal here — every `echo ... > fifo` opens
-			// and closes the pipe — so reopen and keep serving.
+			// and closes the pipe — so reopen and keep serving, but never in
+			// a tight loop and never into something that is no longer our
+			// FIFO (removed and replaced by a regular file, say).
 			while (fRunning.load(std::memory_order_acquire))
 			{
+				struct stat st;
+				if (fstat(fd, &st) != 0 || !S_ISFIFO(st.st_mode) || st.st_uid != geteuid())
+				{
+					fprintf(stdout, "[INPUT] '%s' is no longer our FIFO; input tap stopping\n", fFifoPath.c_str());
+					fflush(stdout);
+					close(fd);
+					return;
+				}
 				struct pollfd pfd;
 				pfd.fd = fd;
 				pfd.events = POLLIN;
+				pfd.revents = 0;
 				int rc = poll(&pfd, 1, 200);
 				if (rc < 0 && errno != EINTR)
 				{
@@ -205,15 +218,13 @@ namespace Rtt
 
 					// Parse on the reader thread (string work only — no
 					// engine state); dispatch happens on the main thread.
-					Command cmd;
-					memset(&cmd, 0, sizeof(cmd));
+					Command cmd{};
 					cmd.ms = 300;
 
 					int consumed = 0;
 					float x1 = 0, y1 = 0, x2 = 0, y2 = 0;
 					int ms = 300;
 					char key[64] = { 0 };
-					char text[257] = { 0 };
 					if (sscanf(line.c_str(), " tap %f %f%n", &x1, &y1, &consumed) == 2 && consumed == (int)line.size())
 					{
 						cmd.type = Command::kTap;
@@ -235,12 +246,14 @@ namespace Rtt
 						cmd.type = Command::kDrag;
 						cmd.x1 = x1; cmd.y1 = y1; cmd.x2 = x2; cmd.y2 = y2;
 					}
-					else if (sscanf(line.c_str(), " key %63s%n", key, &consumed) == 1 && consumed == (int)line.size())
+					else if (line.rfind("key ", 0) == 0 && line.size() > 4 && line.size() < 68)
 					{
+						// Rest-of-line: SDL key names may contain spaces
+						// ("Left Shift").
 						cmd.type = Command::kKey;
-						cmd.arg = key;
+						cmd.arg = line.substr(4);
 					}
-					else if (line.rfind("text ", 0) == 0 && line.size() > 5 && line.size() < 5 + sizeof(text))
+					else if (line.rfind("text ", 0) == 0 && line.size() > 5 && line.size() < 5 + 257)
 					{
 						cmd.type = Command::kText;
 						cmd.arg = line.substr(5);
@@ -248,6 +261,7 @@ namespace Rtt
 					else
 					{
 						fprintf(stdout, "[INPUT] ignored: %s\n", line.c_str());
+						fflush(stdout);
 						continue;
 					}
 
@@ -268,6 +282,13 @@ namespace Rtt
 				}
 			}
 			close(fd);
+			// A trailing partial line must not leak into the next writer's
+			// first line.
+			pending.clear();
+			// The writer left: pause before reopening so a replaced path
+			// cannot become a hot re-injection loop.
+			struct timespec ts = { 0, 50 * 1000 * 1000 };
+			nanosleep(&ts, NULL);
 		}
 	}
 
@@ -371,8 +392,10 @@ namespace Rtt
 			commands.swap(fQueue);
 		}
 
-		for (const Command& cmd : commands)
+		size_t index = 0;
+		for (; index < commands.size(); ++index)
 		{
+			const Command& cmd = commands[index];
 			switch (cmd.type)
 			{
 				case Command::kTap:
@@ -411,10 +434,27 @@ namespace Rtt
 						fDrag.lastX = fDrag.fromX;
 						fDrag.lastY = fDrag.fromY;
 						Ack("dispatched drag (%g,%g)->(%g,%g) over %dms", cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.ms);
+						// A drag emits its press on the next tick; anything
+						// queued behind it must wait, or it would fire before
+						// the press.
+						++index;
+						if (index < commands.size())
+						{
+							std::lock_guard<std::mutex> guard(fMutex);
+							for (size_t i = commands.size(); i > index; --i)
+							{
+								fQueue.push_front(std::move(commands[i - 1]));
+							}
+						}
+						goto outOfLoop;
 					}
 					else if (fDrag.active)
 					{
-						Ack("ignored: drag already in progress");
+						// Queued rather than dropped: the drag finishes within
+						// its own ms window, then this one runs.
+						Ack("queued: drag already in progress");
+						std::lock_guard<std::mutex> guard(fMutex);
+						fQueue.push_back(cmd);
 					}
 					break;
 				}
@@ -432,6 +472,7 @@ namespace Rtt
 				}
 			}
 		}
+		outOfLoop:;
 
 		// Frame-paced drag: emit the interpolated move for "now", so the app
 		// sees began/moved/.../ended across frames like a real finger.

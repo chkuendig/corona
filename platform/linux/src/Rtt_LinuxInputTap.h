@@ -55,6 +55,12 @@ namespace Rtt
 		// prints one "[INPUT] ..." line to stdout, at most one frame later;
 		// application-level waits stay with the project's own markers.
 		//
+		// Faithfulness: injected touch events are indistinguishable from real
+		// ones. Corona "mouse" listeners are not fully faithful — SDL's
+		// global button state is not updated by SDL_PushEvent, so
+		// mouse-event isPrimaryButtonDown stays false; drive interaction
+		// through touch listeners, which everything on screen uses.
+		//
 		// Called once per tick from the main loop. Dispatches queued commands
 		// as real SDL events through the genuine input pipeline (listener,
 		// hit-testing, native focus), which is what makes this the headless
