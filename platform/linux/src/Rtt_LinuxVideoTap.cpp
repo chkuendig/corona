@@ -10,8 +10,7 @@
 
 #include "Rtt_LinuxVideoTap.h"
 
-#include "Core/Rtt_Assert.h"
-#include "Core/Rtt_String.h"
+#include "Core/Rtt_Config.h"  // defines GL_GLEXT_PROTOTYPES; must precede the GL header
 
 #include <SDL_opengl.h>
 
@@ -59,7 +58,7 @@ namespace Rtt
 	static bool QuerySurfaceSize(int* width, int* height)
 	{
 		static void* egl = nullptr;
-		static void (*query)(void*, unsigned int, unsigned int, int*) = nullptr;
+		static void (*query)(void*, void*, unsigned int, int*) = nullptr;
 		static void* (*current_display)() = nullptr;
 		static void* (*current_surface)(unsigned int) = nullptr;
 		static bool resolved = false;
@@ -69,9 +68,11 @@ namespace Rtt
 			egl = dlopen("libEGL.so.1", RTLD_NOW | RTLD_GLOBAL);
 			if (egl)
 			{
-				current_display = (void* (*)())dlsym(egl, "eglGetCurrentDisplay");
-				current_surface = (void* (*)(unsigned int))dlsym(egl, "eglGetCurrentSurface");
-				query = (void (*)(void*, unsigned int, unsigned int, int*))dlsym(egl, "eglQuerySurface");
+				// dlsym returns void*, which C++ refuses to assign to a
+				// function pointer directly.
+				*reinterpret_cast<void**>(&current_display) = dlsym(egl, "eglGetCurrentDisplay");
+				*reinterpret_cast<void**>(&current_surface) = dlsym(egl, "eglGetCurrentSurface");
+				*reinterpret_cast<void**>(&query) = dlsym(egl, "eglQuerySurface");
 			}
 			resolved = true;
 		}
@@ -262,6 +263,12 @@ namespace Rtt
 
 	void LinuxVideoTap::StageFrame(int drawableWidth, int drawableHeight)
 	{
+		static int stageCount = 0;
+		if (stageCount < 3)
+		{
+			++stageCount;
+			TapLog("stage #%d drawable %dx%d", stageCount, drawableWidth, drawableHeight);
+		}
 		int w = drawableWidth;
 		int h = drawableHeight;
 		int surfaceW = 0, surfaceH = 0;
@@ -302,18 +309,41 @@ namespace Rtt
 		glGetIntegerv(GL_READ_BUFFER, &readBuffer);
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
 		glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
-		glReadBuffer(GL_BACK);
+		// Double-buffered contexts read GL_BACK; the offscreen driver's
+		// pbuffer context is single-buffered, where GL_BACK is invalid and
+		// the read would come back black. Probe once and remember.
+		static int sReadBufferMode = -1;
+		if (sReadBufferMode < 0)
+		{
+			while (glGetError() != GL_NO_ERROR)
+			{
+			}
+			glReadBuffer(GL_BACK);
+			sReadBufferMode = (glGetError() == GL_NO_ERROR) ? GL_BACK : GL_FRONT;
+			if (sReadBufferMode == GL_FRONT)
+			{
+				TapLog("context is single-buffered; reading GL_FRONT");
+			}
+		}
+		glReadBuffer((GLenum)sReadBufferMode);
 		glReadPixels(0, 0, w, h, GL_BGRA, GL_UNSIGNED_BYTE, fFill.data.data() + kHeaderSize);
 		glBindFramebuffer(GL_READ_FRAMEBUFFER, readFbo);
 		glBindBuffer(GL_PIXEL_PACK_BUFFER, packBuffer);
 		glReadBuffer((GLenum)readBuffer);
 
-		fStagedSeq = fSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+		fStagedSeq = 1;  // marker: a staged frame exists (seq assigned at commit)
 		WriteHeader(fFill.data, (uint32_t)w, (uint32_t)h);
 	}
 
 	void LinuxVideoTap::CommitFrame()
 	{
+		static int commitCount = 0;
+		if (commitCount < 3)
+		{
+			++commitCount;
+			TapLog("commit #%d staged=%llu queue=%zu", commitCount,
+				   (unsigned long long)fStagedSeq, (size_t)([&] { std::lock_guard<std::mutex> g(fMutex); return fQueue.size(); }()));
+		}
 		if (fStagedSeq == 0)
 		{
 			return;
@@ -348,6 +378,12 @@ namespace Rtt
 			}
 			else
 			{
+				// Sequence numbers are assigned at commit, not at staging:
+				// a consumer's seq gaps then mean "the tap dropped this
+				// frame", never "the fps cap skipped a stage" — the two are
+				// different facts and only the first is a problem.
+				*(uint64_t*)(fFill.data.data() + 32) =
+					fSequence.fetch_add(1, std::memory_order_relaxed) + 1;
 				fQueue.push_back(std::move(fFill));
 				fFill = Frame{};
 				fEmitted.fetch_add(1, std::memory_order_relaxed);
