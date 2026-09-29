@@ -55,6 +55,8 @@ namespace Rtt
 	// The EGL surface is the authority on readable bounds — the SDL window
 	// size can disagree under drivers whose surface is fixed at creation
 	// (offscreen). Resolved lazily through dlopen so nothing extra is linked.
+	// Constants per EGL/egl.h: EGL_DRAW 0x3059, EGL_WIDTH 0x3057,
+	// EGL_HEIGHT 0x3056.
 	static bool QuerySurfaceSize(int* width, int* height)
 	{
 		static void* egl = nullptr;
@@ -65,7 +67,7 @@ namespace Rtt
 
 		if (!resolved)
 		{
-			egl = dlopen("libEGL.so.1", RTLD_NOW | RTLD_GLOBAL);
+			egl = dlopen("libEGL.so.1", RTLD_NOW | RTLD_LOCAL);
 			if (egl)
 			{
 				// dlsym returns void*, which C++ refuses to assign to a
@@ -77,16 +79,15 @@ namespace Rtt
 			resolved = true;
 		}
 
-		// EGL_WIDTH 0x3056, EGL_HEIGHT 0x3056 -> 0x3057, EGL_DRAW 0x305E
 		if (egl && query && current_display && current_surface)
 		{
 			void* display = current_display();
-			void* surface = current_surface(0x305E);
+			void* surface = current_surface(0x3059 /* EGL_DRAW */);
 			if (display && surface)
 			{
 				int w = 0, h = 0;
-				query(display, surface, 0x3056, &w);
-				query(display, surface, 0x3057, &h);
+				query(display, surface, 0x3057 /* EGL_WIDTH */, &w);
+				query(display, surface, 0x3056 /* EGL_HEIGHT */, &h);
 				if (w > 0 && h > 0)
 				{
 					*width = w;
@@ -105,28 +106,31 @@ namespace Rtt
 		{
 			return NULL;
 		}
-		if (path[0] != '/')
-		{
-			TapLog("SOLAR2D_VIDEO_PIPE must be an absolute path; tap disabled");
-			return NULL;
-		}
-
+		// Consume both variables on every path: children started through
+		// system() must not inherit a frame stream they never asked for.
+		const char* fpsEnv = getenv("SOLAR2D_VIDEO_FPS");
 		double fps = 30.0;
-		if (const char* fpsEnv = getenv("SOLAR2D_VIDEO_FPS"))
+		if (fpsEnv && *fpsEnv)
 		{
 			char* end = NULL;
 			double parsed = strtod(fpsEnv, &end);
 			if (end == fpsEnv || parsed <= 0.0 || parsed > 240.0)
 			{
 				TapLog("SOLAR2D_VIDEO_FPS '%s' is not a usable rate; tap disabled", fpsEnv);
+				unsetenv("SOLAR2D_VIDEO_PIPE");
+				unsetenv("SOLAR2D_VIDEO_FPS");
 				return NULL;
 			}
 			fps = parsed;
 		}
-
-		// Consume the variable: children started through system() must not
-		// inherit a frame stream they never asked for.
-		unsetenv("SOLAR2D_VIDEO_PIPE");
+		if (path[0] != '/')
+		{
+			TapLog("SOLAR2D_VIDEO_PIPE must be an absolute path; tap disabled");
+			unsetenv("SOLAR2D_VIDEO_PIPE");
+			unsetenv("SOLAR2D_VIDEO_FPS");
+			return NULL;
+		}
+		unsetenv("SOLAR2D_VIDEO_FPS");
 
 		LinuxVideoTap* tap = new LinuxVideoTap(path, fps);
 		if (!tap->Start())
@@ -149,6 +153,12 @@ namespace Rtt
 	{
 		fRunning.store(false, std::memory_order_release);
 		WakeWriter();
+		{
+			// Wake a writer parked in fCond.wait_for as well as the eventfd
+			// poll, so the join is prompt rather than up to 200ms away.
+			std::lock_guard<std::mutex> guard(fMutex);
+			fCond.notify_all();
+		}
 		if (fWriter.joinable())
 		{
 			fWriter.join();
@@ -157,15 +167,18 @@ namespace Rtt
 		{
 			close(fEventFd);
 		}
+		// The marker and lock belong to whoever holds the flock — a tap whose
+		// Start() failed (another instance won the lock) must not delete the
+		// live tap's files.
 		if (fLockFd >= 0)
 		{
 			flock(fLockFd, LOCK_UN);
 			close(fLockFd);
+			std::string ready = fFifoPath + ".ready";
+			unlink(ready.c_str());
+			std::string lock = fFifoPath + ".lock";
+			unlink(lock.c_str());
 		}
-		std::string ready = fFifoPath + ".ready";
-		unlink(ready.c_str());
-		std::string lock = fFifoPath + ".lock";
-		unlink(lock.c_str());
 	}
 
 	bool LinuxVideoTap::Start()
@@ -263,12 +276,6 @@ namespace Rtt
 
 	void LinuxVideoTap::StageFrame(int drawableWidth, int drawableHeight)
 	{
-		static int stageCount = 0;
-		if (stageCount < 3)
-		{
-			++stageCount;
-			TapLog("stage #%d drawable %dx%d", stageCount, drawableWidth, drawableHeight);
-		}
 		int w = drawableWidth;
 		int h = drawableHeight;
 		int surfaceW = 0, surfaceH = 0;
@@ -288,14 +295,26 @@ namespace Rtt
 			return;
 		}
 
+		// Peek the pacing accumulator: when no frame is due under the fps
+		// cap, the readback is skipped entirely — glReadPixels is a sync
+		// point for llvmpipe's threaded rasterizer, not just a memcpy, so a
+		// 60 fps app recorded at 30 should not pay 60 readbacks a second.
+		// (CommitFrame owns the accumulator; this check must not advance it.)
+		const int64_t interval = (int64_t)(1000000000.0 / fFpsCap);
+		const int64_t now = MonotonicNs();
+		if (fNextEmitNs != 0 && now < fNextEmitNs - interval / 2)
+		{
+			return;
+		}
+
 		{
 			std::lock_guard<std::mutex> guard(fMutex);
 			if (fQueue.size() >= kMaxQueuedFrames)
 			{
-				// The queue is the backpressure point. Skipping the readback
-				// matters: glReadPixels is a sync point for llvmpipe's
-				// threaded rasterizer, not just a memcpy.
-				fDropped.fetch_add(1, std::memory_order_relaxed);
+				// Full queue with a frame due: CommitFrame will count this
+				// drop (and consume its sequence number, so consumers see the
+				// gap). Staging reports nothing.
+				fStagedSeq = 0;
 				return;
 			}
 		}
@@ -315,6 +334,8 @@ namespace Rtt
 		static int sReadBufferMode = -1;
 		if (sReadBufferMode < 0)
 		{
+			// Draining pending GL errors is unavoidable for a clean probe;
+			// this runs once, before the app has usually raised any.
 			while (glGetError() != GL_NO_ERROR)
 			{
 			}
@@ -337,13 +358,6 @@ namespace Rtt
 
 	void LinuxVideoTap::CommitFrame()
 	{
-		static int commitCount = 0;
-		if (commitCount < 3)
-		{
-			++commitCount;
-			TapLog("commit #%d staged=%llu queue=%zu", commitCount,
-				   (unsigned long long)fStagedSeq, (size_t)([&] { std::lock_guard<std::mutex> g(fMutex); return fQueue.size(); }()));
-		}
 		if (fStagedSeq == 0)
 		{
 			return;
@@ -374,14 +388,14 @@ namespace Rtt
 			std::lock_guard<std::mutex> guard(fMutex);
 			if (fQueue.size() >= kMaxQueuedFrames)
 			{
+				// A drop consumes a sequence number so the consumer sees the
+				// gap — the ONLY thing that creates one. Staging skips and
+				// fps-cap skips never do.
+				fSequence.fetch_add(1, std::memory_order_relaxed);
 				fDropped.fetch_add(1, std::memory_order_relaxed);
 			}
 			else
 			{
-				// Sequence numbers are assigned at commit, not at staging:
-				// a consumer's seq gaps then mean "the tap dropped this
-				// frame", never "the fps cap skipped a stage" — the two are
-				// different facts and only the first is a problem.
 				*(uint64_t*)(fFill.data.data() + 32) =
 					fSequence.fetch_add(1, std::memory_order_relaxed) + 1;
 				fQueue.push_back(std::move(fFill));
@@ -400,7 +414,23 @@ namespace Rtt
 			int fd = open(fFifoPath.c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
 			if (fd >= 0)
 			{
-				return fd;  // a reader is attached
+				// Still a FIFO we own? The path may have been removed and
+				// recreated as a regular file since startup — writing frames
+				// into that would fill the disk at full frame rate.
+				struct stat st;
+				if (fstat(fd, &st) != 0 || !S_ISFIFO(st.st_mode) || st.st_uid != geteuid())
+				{
+					TapLog("'%s' is no longer our FIFO; tap stopping", fFifoPath.c_str());
+					close(fd);
+					return -1;
+				}
+				// A reader just connected: anything staged while it was gone
+				// is stale by definition. Start the segment from now.
+				{
+					std::lock_guard<std::mutex> guard(fMutex);
+					fQueue.clear();
+				}
+				return fd;
 			}
 			if (errno != ENXIO && errno != ENOENT)
 			{
@@ -412,6 +442,7 @@ namespace Rtt
 			struct pollfd pfd;
 			pfd.fd = fEventFd;
 			pfd.events = POLLIN;
+			pfd.revents = 0;
 			int rc = poll(&pfd, 1, 200);
 			if (rc < 0 && errno != EINTR)
 			{
@@ -429,11 +460,17 @@ namespace Rtt
 			struct pollfd pfd[2];
 			pfd[0].fd = fd;
 			pfd[0].events = POLLOUT;
+			pfd[0].revents = 0;
 			pfd[1].fd = fEventFd;
 			pfd[1].events = POLLIN;
+			pfd[1].revents = 0;
 			int rc = poll(pfd, 2, -1);
-			if (rc < 0 && errno != EINTR)
+			if (rc < 0)
 			{
+				if (errno == EINTR)
+				{
+					continue;
+				}
 				return false;
 			}
 			if (pfd[1].revents & POLLIN)
