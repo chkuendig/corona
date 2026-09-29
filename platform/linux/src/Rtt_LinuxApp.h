@@ -80,6 +80,10 @@ namespace Rtt
 {
 	void PushEvent(int evt);
 
+#ifdef Rtt_SIMULATOR
+	class LinuxVideoTap;
+#endif
+
 	struct SolarApp : public ref_counted
 	{
 		SolarApp(const std::string& resourceDir);
@@ -97,6 +101,15 @@ namespace Rtt
 		void OnIconized();
 		void SetWindowSize(int newWidth, int newHeight);
 		SolarAppContext* GetContext() const { return fContext; }
+
+#ifdef Rtt_SIMULATOR
+		LinuxVideoTap* GetVideoTap() const { return fVideoTap; }
+		// Under SDL's offscreen driver the EGL pbuffer is sized once at window
+		// creation and SDL_SetWindowSize cannot change it. This recreates the
+		// window and GL context at the target size; returns false on every
+		// other driver (caller should SDL_SetWindowSize instead).
+		bool RecreateWindowForOffscreen(int w, int h);
+#endif
 
 		virtual bool IsRunningOnSimulator() { return false; }
 		bool IsSuspended() const { return GetRuntime()->IsSuspended(); }
@@ -142,6 +155,9 @@ namespace Rtt
 		smart_ptr<SolarAppContext> fContext;
 		SDL_Window* fWindow;
 		SDL_GLContext fGLcontext;
+#ifdef Rtt_SIMULATOR
+		LinuxVideoTap* fVideoTap;
+#endif
 
 		std::string fResourceDir;
 		Config fConfig;

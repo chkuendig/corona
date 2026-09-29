@@ -30,6 +30,10 @@
 #include "Rtt_LinuxUtils.h"
 #include "Rtt_MPlatformServices.h"
 #include "Rtt_LinuxApp.h"
+
+#ifdef Rtt_SIMULATOR
+#include "Rtt_LinuxVideoTap.h"
+#endif
 #include "Rtt_HTTPClient.h"
 #include "Rtt_LinuxCEF.h"
 #include <curl/curl.h>
@@ -427,6 +431,12 @@ namespace Rtt
 		{
 			// render only GUI
 			Flush();
+#ifdef Rtt_SIMULATOR
+			if (LinuxVideoTap* tap = app->GetVideoTap())
+			{
+				tap->CommitFrame();
+			}
+#endif
 			return;
 		}
 
@@ -437,12 +447,33 @@ namespace Rtt
 
 		// advance engine
 		(*fRuntime)();
+#ifdef Rtt_SIMULATOR
+		// One tap commit per tick, after every Flush (the runtime's render,
+		// and any stills' re-renders) has run: the last staged frame wins.
+		if (LinuxVideoTap* tap = app->GetVideoTap())
+		{
+			tap->CommitFrame();
+		}
+#endif
 	}
 
 	void SolarAppContext::Flush()
 	{
 		app->RenderGUI();
 		fRuntime->GetDisplay().Invalidate();
+#ifdef Rtt_SIMULATOR
+		// Stage the frame tap before the swap, while the back buffer is still
+		// current. Extra Flush() calls (Display::Capture re-renders through
+		// here too) only overwrite the staging buffer; the commit happens
+		// once per tick at the end of advance(), so stills taken mid-recording
+		// insert no extra frames.
+		if (LinuxVideoTap* tap = app->GetVideoTap())
+		{
+			int w = 0, h = 0;
+			SDL_GL_GetDrawableSize(fWindow, &w, &h);
+			tap->StageFrame(w, h);
+		}
+#endif
 		SDL_GL_SwapWindow(fWindow);
 	}
 
@@ -495,7 +526,16 @@ namespace Rtt
 	{
 		SetWidth(w);
 		SetHeight(h);
-		SDL_SetWindowSize(fWindow, w, h + app->GetMenuHeight());
+#ifdef Rtt_SIMULATOR
+		// The offscreen driver cannot resize its EGL pbuffer, so the window
+		// (and with it the GL context) is recreated at the target size; on
+		// every other driver RecreateWindowForOffscreen() is a no-op false
+		// and the ordinary resize path runs.
+		if (!app->RecreateWindowForOffscreen(w, h + app->GetMenuHeight()))
+#endif
+		{
+			SDL_SetWindowSize(fWindow, w, h + app->GetMenuHeight());
+		}
 		RestartRenderer();
 
 		fRuntime->DispatchEvent(ResizeEvent());
