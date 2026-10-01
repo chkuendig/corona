@@ -29,7 +29,8 @@ namespace Rtt
 		virtual int ValueForKey(lua_State *L, const char key[]) const;
 		virtual bool SetValueForKey(lua_State *L, const char key[], int valueIndex);
 		static int addEventListener(lua_State *L);
-		void dispatch(const char* phase, int pos, ImWchar ch);
+		void dispatch(const char* phase, int startPosition = 0, int numDeleted = 0, const char* newCharacters = "", const char* oldText = "");
+		void ApplyPendingText(ImGuiInputTextCallbackData* data);
 		void Draw() override;		// for ImGui renderer
 
 	protected:
@@ -38,6 +39,8 @@ namespace Rtt
 		static int SetReturnKey(lua_State *L);
 		static int SetSelection(lua_State *L);
 		static int GetSelection(lua_State *L);
+
+		void DispatchEditing();
 
 	private:
 
@@ -56,6 +59,7 @@ namespace Rtt
 		bool fIsEditable;
 		bool fIsSecure;
 		bool fHasFocus;
+		bool fHasPendingText;   // .text assigned since the last Draw
 		InputType fInputType;
 		char fValue[1024];
 		char fOldValue[1024];

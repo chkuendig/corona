@@ -30,6 +30,7 @@ namespace Rtt
 		, fIsEditable(true)
 		, fIsSecure(false)
 		, fHasFocus(false)
+		, fHasPendingText(false)
 		, fInputType(InputType::undefined)
 		, fFontSize(0)
 	{
@@ -76,8 +77,7 @@ namespace Rtt
 		int result = 1;
 		if (strcmp("text", key) == 0)
 		{
-			string val; // = fControl->GetValue();
-			lua_pushstring(L, val.c_str());
+			lua_pushstring(L, fValue);
 		}
 		else if (strcmp("size", key) == 0)
 		{
@@ -170,7 +170,11 @@ namespace Rtt
 		bool result = true;
 		if (strcmp("text", key) == 0)
 		{
-			strncpy(fValue, lua_tostring(L, valueIndex), sizeof(fValue));
+			const char* text = lua_tostring(L, valueIndex);
+			snprintf(fValue, sizeof(fValue), "%s", text ? text : "");
+			// A programmatic change is not an edit: no "editing" event.
+			strcpy(fOldValue, fValue);
+			fHasPendingText = true;
 		}
 		else if (strcmp("size", key) == 0)
 		{
@@ -286,63 +290,107 @@ namespace Rtt
 	    return 0;
 	}
 
-	void LinuxTextBoxObject::dispatch(const char* phase, int pos, ImWchar ch)
+	void LinuxTextBoxObject::dispatch(const char* phase, int startPosition, int numDeleted, const char* newCharacters, const char* oldText)
 	{
-		if (fHandle && fHandle->IsValid())
+		if (fHandle && fHandle->IsValid() && fLuaReference)
 		{
 			lua_State* L = fHandle->Dereference();
 			CoronaLuaNewEvent(L, "userInput");
 			int luaTableStackIndex = lua_gettop(L);
-			int nPushed = 0;
 
 			lua_pushstring(L, phase);
 			lua_setfield(L, luaTableStackIndex, "phase");
-			nPushed++;
 
 			// Add 'self' to the event table
 			GetProxy()->PushTable(L);
 			lua_setfield(L, -2, "target");
-			nPushed++;
 
 			if (strcmp(phase, "editing") == 0)
 			{
-				char s[3];
-				memcpy(s, &ch, 2);
-				s[2] = 0;
-				lua_pushstring(L, s);
+				lua_pushstring(L, newCharacters);
 				lua_setfield(L, luaTableStackIndex, "newCharacters");
-				nPushed++;
 
-				int numDeleted = 0;
-				lua_pushnumber(L, numDeleted);
+				lua_pushinteger(L, numDeleted);
 				lua_setfield(L, luaTableStackIndex, "numDeleted");
-				nPushed++;
 
-				lua_pushstring(L, fOldValue);
+				lua_pushstring(L, oldText);
 				lua_setfield(L, luaTableStackIndex, "oldText");
-				nPushed++;
 
-				lua_pushnumber(L, pos);
+				lua_pushinteger(L, startPosition);
 				lua_setfield(L, luaTableStackIndex, "startPosition");
-				nPushed++;
 
 				lua_pushstring(L, fValue);
 				lua_setfield(L, luaTableStackIndex, "text");
-				nPushed++;
-
-				strcpy(fOldValue, fValue);
 			}
 			CoronaLuaDispatchEvent(L, fLuaReference, 0);
 		}
 	}
 
+	static bool IsUtf8Continuation(char c)
+	{
+		return ((unsigned char)c & 0xC0) == 0x80;
+	}
+
+	static int Utf8Length(const char* s, size_t n)
+	{
+		int count = 0;
+		for (size_t i = 0; i < n; i++)
+		{
+			if (!IsUtf8Continuation(s[i]))
+				count++;
+		}
+		return count;
+	}
+
+	void LinuxTextBoxObject::DispatchEditing()
+	{
+		if (strcmp(fOldValue, fValue) == 0)
+			return;
+
+		// Describe the edit as the one replaced run between the common prefix
+		// and suffix, cut on UTF-8 character boundaries.
+		size_t oldLen = strlen(fOldValue);
+		size_t newLen = strlen(fValue);
+		size_t prefix = 0;
+		while (prefix < oldLen && prefix < newLen && fOldValue[prefix] == fValue[prefix])
+			prefix++;
+		while (prefix > 0 && (IsUtf8Continuation(fOldValue[prefix]) || IsUtf8Continuation(fValue[prefix])))
+			prefix--;
+		size_t suffix = 0;
+		while (suffix < oldLen - prefix && suffix < newLen - prefix && fOldValue[oldLen - 1 - suffix] == fValue[newLen - 1 - suffix])
+			suffix++;
+		while (suffix > 0 && (IsUtf8Continuation(fOldValue[oldLen - suffix]) || IsUtf8Continuation(fValue[newLen - suffix])))
+			suffix--;
+
+		string oldText(fOldValue);
+		string newCharacters(fValue + prefix, newLen - prefix - suffix);
+		int numDeleted = Utf8Length(fOldValue + prefix, oldLen - prefix - suffix);
+		int startPosition = Utf8Length(fOldValue, prefix);
+
+		// Before the listener runs: a listener that assigns .text resets the
+		// baseline itself.
+		strcpy(fOldValue, fValue);
+		dispatch("editing", startPosition, numDeleted, newCharacters.c_str(), oldText.c_str());
+	}
+
 	static int ImGuiInputTextCallback(ImGuiInputTextCallbackData* data)
 	{
 		LinuxTextBoxObject* thiz = (LinuxTextBoxObject*)data->UserData;
-		thiz->dispatch("editing", data->CursorPos, data->EventChar);
-
-		// accept
+		thiz->ApplyPendingText(data);
 		return 0;
+	}
+
+	void LinuxTextBoxObject::ApplyPendingText(ImGuiInputTextCallbackData* data)
+	{
+		// While the field is being edited ImGui works on its own copy of the
+		// text and writes it back over fValue every frame, so a .text
+		// assignment has to go through that copy or it is lost.
+		if (fHasPendingText)
+		{
+			fHasPendingText = false;
+			data->DeleteChars(0, data->BufTextLen);
+			data->InsertChars(0, fValue);
+		}
 	}
 
 	void LinuxTextBoxObject::Draw()
@@ -359,7 +407,9 @@ namespace Rtt
 		char fldLabel[32];
 		snprintf(fldLabel, sizeof(fldLabel), "##TextFld%p", this);
 
-		if (ImGui::Begin(windowLabel, NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar))
+		// NoFocusOnAppearing: ImGui focuses every new window, which would fire
+		// began/ended for each field as it is created.
+		if (ImGui::Begin(windowLabel, NULL, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoFocusOnAppearing))
 		{
 			// set fontsize
 			float fontSize = ImGui::GetTextLineHeight();
@@ -374,11 +424,11 @@ namespace Rtt
 
 			if (fHasFocus && !ImGui::IsWindowFocused())
 			{
-				dispatch("ended", 0, 0);
+				dispatch("ended");
 			}
 			if (!fHasFocus && ImGui::IsWindowFocused())
 			{
-				dispatch("began", 0, 0);
+				dispatch("began");
 			}
 			fHasFocus = ImGui::IsWindowFocused();
 
@@ -386,7 +436,7 @@ namespace Rtt
 			ImGui::SetCursorPosY(0);
 			ImGui::PushItemWidth(fBounds.Width());		// input field width
 			{
-				ImGuiInputTextFlags flags = ImGuiInputTextFlags_CallbackCharFilter;
+				ImGuiInputTextFlags flags = ImGuiInputTextFlags_CallbackAlways;
 				if (!fIsEditable)
 					flags |= ImGuiInputTextFlags_ReadOnly;
 
@@ -397,10 +447,21 @@ namespace Rtt
 				if (fIsSecure)
 					flags |= ImGuiInputTextFlags_Password;
 
+				bool submitted = false;
 				if (fIsSingleLine)
-					ImGui::InputText(fldLabel, fValue, sizeof(fValue), flags, ImGuiInputTextCallback, this);
+					submitted = ImGui::InputText(fldLabel, fValue, sizeof(fValue), flags | ImGuiInputTextFlags_EnterReturnsTrue, ImGuiInputTextCallback, this);
 				else
 					ImGui::InputTextMultiline(fldLabel, fValue, sizeof(fValue), ImVec2(w, h), flags, ImGuiInputTextCallback, this);
+
+				// Not being edited: ImGui reads fValue directly, so an
+				// assignment needs no forwarding.
+				fHasPendingText = false;
+
+				// After InputText has written the edit back, so the event and
+				// .text both carry the new text.
+				DispatchEditing();
+				if (submitted)
+					dispatch("submitted");
 
 			}
 			ImGui::PopItemWidth();
