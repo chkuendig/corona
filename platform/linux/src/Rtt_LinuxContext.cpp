@@ -358,6 +358,15 @@ namespace Rtt
 
 		Init();
 
+		// The saved window geometry decides the window size below. Apply it
+		// before config.lua runs, so display.pixelWidth/Height there report
+		// the window the app will actually get, as on other platforms.
+		if (fConfig["w"].to_int() > 0 && fConfig["h"].to_int() > 0)
+		{
+			SetWidth(fConfig["w"].to_int());
+			SetHeight(fConfig["h"].to_int());
+		}
+
 		if (Runtime::kSuccess != fRuntime->LoadApplication(Runtime::kLinuxLaunchOption, fRuntimeDelegate->fOrientation))
 		{
 			delete fRuntime;
