@@ -69,6 +69,7 @@ namespace Rtt
 		: fFifoPath(fifoPath), fLockFd(-1), fRunning(false)
 	{
 		memset(&fDrag, 0, sizeof(fDrag));
+		memset(&fPress, 0, sizeof(fPress));
 	}
 
 	LinuxInputTap::~LinuxInputTap()
@@ -305,6 +306,18 @@ namespace Rtt
 
 	void LinuxInputTap::PushMoveTo(int windowX, int windowY, bool isDown, bool isUp, unsigned long windowID)
 	{
+		// Motion first: ImGui's input queue applies a press at the pointer
+		// position it already has, and defers a move that follows a press to
+		// the next frame, so a press queued ahead of its motion lands where
+		// the pointer used to be.
+		SDL_Event m;
+		memset(&m, 0, sizeof(m));
+		m.type = SDL_MOUSEMOTION;
+		m.motion.windowID = (Uint32)windowID;
+		m.motion.x = windowX;
+		m.motion.y = windowY;
+		SDL_PushEvent(&m);
+
 		if (isDown)
 		{
 			SDL_Event e;
@@ -318,14 +331,6 @@ namespace Rtt
 			e.button.y = windowY;
 			SDL_PushEvent(&e);
 		}
-
-		SDL_Event m;
-		memset(&m, 0, sizeof(m));
-		m.type = SDL_MOUSEMOTION;
-		m.motion.windowID = (Uint32)windowID;
-		m.motion.x = windowX;
-		m.motion.y = windowY;
-		SDL_PushEvent(&m);
 
 		if (isUp)
 		{
@@ -342,9 +347,23 @@ namespace Rtt
 		}
 	}
 
+	void LinuxInputTap::PushHover(int windowX, int windowY, unsigned long windowID)
+	{
+		PushMoveTo(windowX, windowY, false, false, windowID);
+	}
+
 	void LinuxInputTap::PushTap(int windowX, int windowY, unsigned long windowID)
 	{
 		PushMoveTo(windowX, windowY, true, true, windowID);
+	}
+
+	void LinuxInputTap::Requeue(std::deque<Command>& commands, size_t from)
+	{
+		std::lock_guard<std::mutex> guard(fMutex);
+		for (size_t i = commands.size(); i > from; --i)
+		{
+			fQueue.push_front(std::move(commands[i - 1]));
+		}
 	}
 
 	void LinuxInputTap::PushKey(const std::string& name, unsigned long windowID)
@@ -386,6 +405,21 @@ namespace Rtt
 		// ("screen") pixels; the mouse listener subtracts the menu height on
 		// the way in, so adding it back yields the SDL window coordinates a
 		// real mouse event would carry.
+		//
+		// Presses are two-phase. A tap or drag first moves the pointer to the
+		// press point and stops; the press follows on the next tick. The app
+		// drops mouse events while io.WantCaptureMouse is set, and ImGui only
+		// recomputes that flag (from the pointer position) in NewFrame, after
+		// this batch has been filtered. Without the extra tick the flag still
+		// describes where the pointer was left, so the first tap after a text
+		// field is swallowed whole.
+		if (fPress.active)
+		{
+			fPress.active = false;
+			PushTap(fPress.x, fPress.y, windowID);
+		}
+
+		bool dragStarted = false;
 		std::deque<Command> commands;
 		{
 			std::lock_guard<std::mutex> guard(fMutex);
@@ -399,21 +433,33 @@ namespace Rtt
 			switch (cmd.type)
 			{
 				case Command::kTap:
-				{
-					if (display)
-					{
-						S32 sx = (S32)cmd.x1, sy = (S32)cmd.y1;
-						display->ContentToScreen(sx, sy);
-						PushTap(sx, sy + menuHeight, windowID);
-						Ack("dispatched tap (%g,%g) -> window (%d,%d)", cmd.x1, cmd.y1, sx, sy + menuHeight);
-					}
-					break;
-				}
 				case Command::kWindowTap:
 				{
-					PushTap((int)cmd.x1, (int)cmd.y1, windowID);
-					Ack("dispatched wtap at window (%g,%g)", cmd.x1, cmd.y1);
-					break;
+					int wx = (int)cmd.x1, wy = (int)cmd.y1;
+					if (cmd.type == Command::kTap)
+					{
+						if (!display)
+						{
+							break;
+						}
+						S32 sx = (S32)cmd.x1, sy = (S32)cmd.y1;
+						display->ContentToScreen(sx, sy);
+						wx = sx;
+						wy = sy + menuHeight;
+						Ack("dispatched tap (%g,%g) -> window (%d,%d)", cmd.x1, cmd.y1, wx, wy);
+					}
+					else
+					{
+						Ack("dispatched wtap at window (%g,%g)", cmd.x1, cmd.y1);
+					}
+					PushHover(wx, wy, windowID);
+					fPress.active = true;
+					fPress.x = wx;
+					fPress.y = wy;
+					// The press goes out next tick; anything queued behind
+					// it must wait, or it would fire before the press.
+					Requeue(commands, index + 1);
+					goto outOfLoop;
 				}
 				case Command::kDrag:
 				{
@@ -434,18 +480,11 @@ namespace Rtt
 						fDrag.lastX = fDrag.fromX;
 						fDrag.lastY = fDrag.fromY;
 						Ack("dispatched drag (%g,%g)->(%g,%g) over %dms", cmd.x1, cmd.y1, cmd.x2, cmd.y2, cmd.ms);
-						// A drag emits its press on the next tick; anything
-						// queued behind it must wait, or it would fire before
-						// the press.
-						++index;
-						if (index < commands.size())
-						{
-							std::lock_guard<std::mutex> guard(fMutex);
-							for (size_t i = commands.size(); i > index; --i)
-							{
-								fQueue.push_front(std::move(commands[i - 1]));
-							}
-						}
+						// Hover now, press on the next tick (see above);
+						// anything queued behind the drag waits for it.
+						PushHover((int)fDrag.fromX, (int)fDrag.fromY, windowID);
+						dragStarted = true;
+						Requeue(commands, index + 1);
 						goto outOfLoop;
 					}
 					else if (fDrag.active)
@@ -476,7 +515,7 @@ namespace Rtt
 
 		// Frame-paced drag: emit the interpolated move for "now", so the app
 		// sees began/moved/.../ended across frames like a real finger.
-		if (fDrag.active)
+		if (fDrag.active && !dragStarted)
 		{
 			const int64_t now = MonotonicNs();
 			float t;

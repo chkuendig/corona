@@ -53,6 +53,8 @@ namespace Rtt
 		// Ack semantics: commands are fire-and-forget from the writer's
 		// perspective (writing only queues them). Each dispatched command
 		// prints one "[INPUT] ..." line to stdout, at most one frame later;
+		// a tap or drag moves the pointer on that frame and presses on the
+		// next, so the press reaches the app at most two frames after;
 		// application-level waits stay with the project's own markers.
 		//
 		// Faithfulness: injected touch events are indistinguishable from real
@@ -72,6 +74,7 @@ namespace Rtt
 
 		bool Start();
 		void ReaderLoop();
+		void PushHover(int windowX, int windowY, unsigned long windowID);
 		void PushTap(int windowX, int windowY, unsigned long windowID);
 		void PushMoveTo(int windowX, int windowY, bool isDown, bool isUp, unsigned long windowID);
 		void PushKey(const std::string& name, unsigned long windowID);
@@ -103,6 +106,8 @@ namespace Rtt
 			bool downSent;
 		};
 
+		void Requeue(std::deque<Command>& commands, size_t from);
+
 		const std::string fFifoPath;
 		int fLockFd;
 
@@ -112,7 +117,15 @@ namespace Rtt
 		std::mutex fMutex;
 		std::deque<Command> fQueue;  // reader -> main thread, bounded
 
-		DragState fDrag;  // main thread only
+		// A tap whose pointer has moved and whose press goes out next tick.
+		struct PressState
+		{
+			bool active;
+			int x, y;
+		};
+
+		DragState fDrag;    // main thread only
+		PressState fPress;  // main thread only
 	};
 }
 
