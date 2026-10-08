@@ -34,6 +34,23 @@ code:addEventListener("userInput", function(event)
 	end
 end)
 
+-- A field for text longer than one SDL_TEXTINPUT event (31 bytes), including
+-- multi-byte characters that straddle where a naive cut would fall.
+local long = native.newTextField(160, 240, 240, 40)
+long:addEventListener("userInput", function(event)
+	if event.phase == "editing" then
+		log("long editing new=%s", event.newCharacters)
+	end
+end)
+
+-- Mouse listeners must see the injected button as pressed on the press and
+-- through a drag, like a real mouse.
+Runtime:addEventListener("mouse", function(event)
+	if event.type ~= "move" then
+		log("mouse %s primary=%s", event.type, tostring(event.isPrimaryButtonDown))
+	end
+end)
+
 -- An ordinary display object below the fields: the first tap after a field
 -- must reach it.
 local button = display.newRect(160, 360, 200, 60)

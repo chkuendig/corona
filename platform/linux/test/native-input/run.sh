@@ -7,6 +7,9 @@
 #   - a listener that rewrites .text keeps the rewrite
 #   - Enter fires "submitted"
 #   - the first tap after a field reaches the display object under it
+#   - text longer than one SDL event arrives whole, split at characters
+#   - invalid UTF-8 is rejected
+#   - a mouse listener sees the injected button pressed and dragging
 #
 # Usage: run.sh <image>     e.g. run.sh ghcr.io/chkuendig/solar2d:latest
 set -euo pipefail
@@ -49,6 +52,13 @@ send "key return"
 send "tap 160 160"           # code field
 for c in 1 2 x 3 4 5 6 7; do send "text $c"; done
 send "tap 160 360"           # first tap after a field
+send "tap 160 240"           # long field
+send "text abcdefghijklmnopqrstuvwxyz0123456789ABCD"   # 40 bytes: 2 events
+send "text ääääääääääääääää€x"                         # ä at byte 30, € at 32
+send "text abcdefghijklmnopqrstuvwxyzabc😀"            # emoji at byte 29
+docker exec "$NAME" sh -c "printf 'text \\377\\n' > $FIFO"   # invalid UTF-8
+sleep 0.5
+send "drag 40 440 120 440 300"   # on the background, for the mouse listener
 sleep 1
 
 # Only what the driven input caused: creation must not fire began/ended.
@@ -75,6 +85,25 @@ expect "Enter fires submitted"             "[T] email submitted read=a@b.co"
 expect "a listener's .text rewrite sticks" "[T] code editing read=123456"
 expect "first tap after a field lands"     "[T] button ended"
 expect ".text reads back afterwards"       "[T] final email=a@b.co code=123456"
+expect "40 ASCII bytes arrive whole"        "[T] long editing new=abcdefghijklmnopqrstuvwxyz0123456789ABCD"
+expect "...in two events"                   "[INPUT] dispatched text (40 codepoints, 40 bytes, 2 events)"
+expect "2- and 3-byte chars survive a split" "[T] long editing new=ääääääääääääääää€x"
+expect "...counted as codepoints"           "[INPUT] dispatched text (18 codepoints, 36 bytes, 2 events)"
+expect "a 4-byte char survives a split"     "[T] long editing new=abcdefghijklmnopqrstuvwxyzabc😀"
+expect "invalid UTF-8 is rejected"          "[INPUT] ignored: text (invalid UTF-8 at byte 0)"
+expect "mouse press reports the button"     "[T] mouse down primary=true"
+expect "an injected drag is a mouse drag"   "[T] mouse drag primary=true"
+expect "release reports it up"              "[T] mouse up primary=false"
+
+# Exactly one insertion per valid text command: a split must not show up
+# as extra editing events, and the rejected line must not insert anything.
+n="$(grep -cF '[T] long editing' <<<"$LOG" || true)"
+if [[ "$n" == 3 ]]; then
+	echo "ok   - one editing event per text command"
+else
+	echo "FAIL - one editing event per text command (saw $n, want 3)"
+	fail=1
+fi
 
 if (( fail )); then
 	echo "--- simulator output"
