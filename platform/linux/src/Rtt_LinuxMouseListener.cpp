@@ -7,7 +7,27 @@ namespace Rtt
 	LinuxMouseListener::LinuxMouseListener()
 		: fScaleX(1)
 		, fScaleY(1)
+		, fInjectedButtons(0)
 	{
+	}
+
+	Uint32 LinuxMouseListener::ButtonState(const SDL_Event& evt)
+	{
+		// Button, motion and wheel events all start with type, timestamp,
+		// windowID, which, so evt.button.which is valid for each of them.
+		if (evt.button.which != kInjectedMouseId)
+		{
+			return SDL_GetMouseState(NULL, NULL);
+		}
+		if (evt.type == SDL_MOUSEBUTTONDOWN)
+		{
+			fInjectedButtons |= SDL_BUTTON(evt.button.button);
+		}
+		else if (evt.type == SDL_MOUSEBUTTONUP)
+		{
+			fInjectedButtons &= ~SDL_BUTTON(evt.button.button);
+		}
+		return fInjectedButtons;
 	}
 
 	//  touch
@@ -169,9 +189,10 @@ namespace Rtt
 				float scrollWheelDeltaY = 0;
 
 				// Fetch the mouse's current up/down buttons states.
-				bool isPrimaryDown = SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_LEFT);
-				bool isSecondaryDown = SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_RIGHT);
-				bool isMiddleDown = SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_MIDDLE);
+				Uint32 buttons = ButtonState(evt);
+				bool isPrimaryDown = buttons & SDL_BUTTON(SDL_BUTTON_LEFT);
+				bool isSecondaryDown = buttons & SDL_BUTTON(SDL_BUTTON_RIGHT);
+				bool isMiddleDown = buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE);
 
 				// Fetch the current state of the "shift", "alt", and "ctrl" keys.
 				const Uint8* key = SDL_GetKeyboardState(NULL);
@@ -202,9 +223,10 @@ namespace Rtt
 				float scrollWheelDeltaY = 0;
 
 				// Fetch the mouse's current up/down buttons states.
-				bool isPrimaryDown = SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_LEFT);
-				bool isSecondaryDown = SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_RIGHT);
-				bool isMiddleDown = SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_MIDDLE);
+				Uint32 buttons = ButtonState(evt);
+				bool isPrimaryDown = buttons & SDL_BUTTON(SDL_BUTTON_LEFT);
+				bool isSecondaryDown = buttons & SDL_BUTTON(SDL_BUTTON_RIGHT);
+				bool isMiddleDown = buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE);
 
 				// Fetch the current state of the "shift", "alt", and "ctrl" keys.
 				const Uint8* key = SDL_GetKeyboardState(NULL);
@@ -247,9 +269,10 @@ namespace Rtt
 				float scrollWheelDeltaY = 0;
 
 				// Fetch the mouse's current up/down buttons states.
-				bool isPrimaryDown = SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_LEFT);
-				bool isSecondaryDown = SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_RIGHT);
-				bool isMiddleDown = SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_MIDDLE);
+				Uint32 buttons = ButtonState(evt);
+				bool isPrimaryDown = buttons & SDL_BUTTON(SDL_BUTTON_LEFT);
+				bool isSecondaryDown = buttons & SDL_BUTTON(SDL_BUTTON_RIGHT);
+				bool isMiddleDown = buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE);
 
 				// Fetch the current state of the "shift", "alt", and "ctrl" keys.
 				const Uint8* key = SDL_GetKeyboardState(NULL);
@@ -279,9 +302,10 @@ namespace Rtt
 				y -= app->GetMenuHeight();
 
 				// Fetch the mouse's current up/down buttons states.
-				bool isPrimaryDown = SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_LEFT);
-				bool isSecondaryDown = SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_RIGHT);
-				bool isMiddleDown = SDL_GetMouseState(NULL, NULL) & SDL_BUTTON(SDL_BUTTON_MIDDLE);
+				Uint32 buttons = ButtonState(evt);
+				bool isPrimaryDown = buttons & SDL_BUTTON(SDL_BUTTON_LEFT);
+				bool isSecondaryDown = buttons & SDL_BUTTON(SDL_BUTTON_RIGHT);
+				bool isMiddleDown = buttons & SDL_BUTTON(SDL_BUTTON_MIDDLE);
 
 				// Fetch the current state of the "shift", "alt", and "ctrl" keys.
 				const Uint8* key = SDL_GetKeyboardState(NULL);

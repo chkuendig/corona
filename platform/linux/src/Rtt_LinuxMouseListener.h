@@ -9,6 +9,12 @@
 
 namespace Rtt
 {
+	// Mouse id carried by events that LinuxInputTap pushes with
+	// SDL_PushEvent. SDL's global button state (SDL_GetMouseState) only
+	// follows events SDL generated itself, so for these the listener keeps
+	// the button state from the events instead.
+	static const Uint32 kInjectedMouseId = 0x54415031; // "TAP1"
+
 	struct LinuxMouseListener : public ref_counted
 	{
 		float fScaleX, fScaleY;
@@ -30,7 +36,11 @@ namespace Rtt
 			int y;
 		};
 
+		// SDL_BUTTON() mask of the buttons the current event leaves pressed.
+		Uint32 ButtonState(const SDL_Event& evt);
+
 		std::map<int, pt> fStartPoint; // finger id ==> point
+		Uint32 fInjectedButtons; // button mask built from injected events
 	};
 };
 

@@ -9,6 +9,7 @@
 #ifdef Rtt_SIMULATOR
 
 #include "Rtt_LinuxInputTap.h"
+#include "Rtt_LinuxMouseListener.h"
 
 #include "Core/Rtt_Config.h"
 #include "Display/Rtt_Display.h"
@@ -66,7 +67,7 @@ namespace Rtt
 	}
 
 	LinuxInputTap::LinuxInputTap(const std::string& fifoPath)
-		: fFifoPath(fifoPath), fLockFd(-1), fRunning(false)
+		: fFifoPath(fifoPath), fLockFd(-1), fRunning(false), fLeftHeld(false)
 	{
 		memset(&fDrag, 0, sizeof(fDrag));
 		memset(&fPress, 0, sizeof(fPress));
@@ -314,6 +315,8 @@ namespace Rtt
 		memset(&m, 0, sizeof(m));
 		m.type = SDL_MOUSEMOTION;
 		m.motion.windowID = (Uint32)windowID;
+		m.motion.which = kInjectedMouseId;
+		m.motion.state = fLeftHeld ? SDL_BUTTON_LMASK : 0;
 		m.motion.x = windowX;
 		m.motion.y = windowY;
 		SDL_PushEvent(&m);
@@ -324,12 +327,14 @@ namespace Rtt
 			memset(&e, 0, sizeof(e));
 			e.type = SDL_MOUSEBUTTONDOWN;
 			e.button.windowID = (Uint32)windowID;
+			e.button.which = kInjectedMouseId;
 			e.button.button = SDL_BUTTON_LEFT;
 			e.button.state = SDL_PRESSED;
 			e.button.clicks = 1;
 			e.button.x = windowX;
 			e.button.y = windowY;
 			SDL_PushEvent(&e);
+			fLeftHeld = true;
 		}
 
 		if (isUp)
@@ -338,12 +343,14 @@ namespace Rtt
 			memset(&u, 0, sizeof(u));
 			u.type = SDL_MOUSEBUTTONUP;
 			u.button.windowID = (Uint32)windowID;
+			u.button.which = kInjectedMouseId;
 			u.button.button = SDL_BUTTON_LEFT;
 			u.button.state = SDL_RELEASED;
 			u.button.clicks = 1;
 			u.button.x = windowX;
 			u.button.y = windowY;
 			SDL_PushEvent(&u);
+			fLeftHeld = false;
 		}
 	}
 

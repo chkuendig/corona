@@ -58,10 +58,11 @@ namespace Rtt
 		// application-level waits stay with the project's own markers.
 		//
 		// Faithfulness: injected touch events are indistinguishable from real
-		// ones. Corona "mouse" listeners are not fully faithful — SDL's
-		// global button state is not updated by SDL_PushEvent, so
-		// mouse-event isPrimaryButtonDown stays false; drive interaction
-		// through touch listeners, which everything on screen uses.
+		// ones. SDL_PushEvent does not update SDL's global button state, so
+		// injected mouse events carry kInjectedMouseId and the mouse listener
+		// keeps their button state itself; a Corona "mouse" listener sees
+		// isPrimaryButtonDown true on the press and through a drag, as with
+		// a real mouse. Only the left button is ever injected.
 		//
 		// Called once per tick from the main loop. Dispatches queued commands
 		// as real SDL events through the genuine input pipeline (listener,
@@ -126,6 +127,7 @@ namespace Rtt
 
 		DragState fDrag;    // main thread only
 		PressState fPress;  // main thread only
+		bool fLeftHeld;     // main thread only: an injected press is down
 	};
 }
 
