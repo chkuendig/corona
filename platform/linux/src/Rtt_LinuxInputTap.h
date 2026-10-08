@@ -46,6 +46,13 @@ namespace Rtt
 		//   key <name>                  SDL key name: return, escape, a, ...
 		//   text <string>               SDL text input (needs a focused field)
 		//
+		// text takes up to 256 bytes of valid UTF-8 and delivers it as one
+		// insertion: SDL carries at most 31 bytes per SDL_TEXTINPUT, so the
+		// tap splits at character boundaries and pushes every piece in the
+		// same tick. Invalid UTF-8 is rejected, not repaired. Longer text is
+		// several text commands. The field's own capacity and input filters
+		// are outside what the ack can know.
+		//
 		// Coordinates in tap/drag are content units — the space the project
 		// itself thinks in. Unknown or malformed lines are logged to stdout
 		// and skipped, never fatal.
@@ -79,7 +86,9 @@ namespace Rtt
 		void PushTap(int windowX, int windowY, unsigned long windowID);
 		void PushMoveTo(int windowX, int windowY, bool isDown, bool isUp, unsigned long windowID);
 		void PushKey(const std::string& name, unsigned long windowID);
-		void PushText(const std::string& text, unsigned long windowID);
+		// Returns how many SDL_TEXTINPUT events went out; *total is how many
+		// the text needed.
+		int PushText(const std::string& text, unsigned long windowID, int* total);
 		void Ack(const char* fmt, ...);
 
 		struct Command
@@ -96,6 +105,7 @@ namespace Rtt
 			float x1, y1, x2, y2;
 			int ms;
 			std::string arg;
+			size_t count;  // kText: UTF-8 codepoints in arg
 		};
 
 		struct DragState

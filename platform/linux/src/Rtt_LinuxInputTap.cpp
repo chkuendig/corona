@@ -10,6 +10,7 @@
 
 #include "Rtt_LinuxInputTap.h"
 #include "Rtt_LinuxMouseListener.h"
+#include "Rtt_LinuxUtf8.h"
 
 #include "Core/Rtt_Config.h"
 #include "Display/Rtt_Display.h"
@@ -257,8 +258,17 @@ namespace Rtt
 					}
 					else if (line.rfind("text ", 0) == 0 && line.size() > 5 && line.size() < 5 + 257)
 					{
+						std::string text = line.substr(5);
+						size_t bad = 0, codepoints = 0;
+						if (!Utf8Validate(text, &bad, &codepoints))
+						{
+							fprintf(stdout, "[INPUT] ignored: text (invalid UTF-8 at byte %zu)\n", bad);
+							fflush(stdout);
+							continue;
+						}
 						cmd.type = Command::kText;
-						cmd.arg = line.substr(5);
+						cmd.arg = text;
+						cmd.count = codepoints;
 					}
 					else
 					{
@@ -396,14 +406,29 @@ namespace Rtt
 		SDL_PushEvent(&up);
 	}
 
-	void LinuxInputTap::PushText(const std::string& text, unsigned long windowID)
+	int LinuxInputTap::PushText(const std::string& text, unsigned long windowID, int* total)
 	{
-		SDL_Event e;
-		memset(&e, 0, sizeof(e));
-		e.type = SDL_TEXTINPUT;
-		e.text.windowID = (Uint32)windowID;
-		snprintf(e.text.text, sizeof(e.text.text), "%s", text.c_str());
-		SDL_PushEvent(&e);
+		// One SDL_TEXTINPUT holds at most 31 bytes, and a cut inside a
+		// character reaches the field as U+FFFD. Split at character
+		// boundaries and push every piece now, in order: spreading them over
+		// ticks would turn one insertion into several "editing" events.
+		std::vector<std::string> chunks = Utf8SplitChunks(text, SDL_TEXTINPUTEVENT_TEXT_SIZE - 1);
+		*total = (int)chunks.size();
+		int pushed = 0;
+		for (const std::string& chunk : chunks)
+		{
+			SDL_Event e;
+			memset(&e, 0, sizeof(e));
+			e.type = SDL_TEXTINPUT;
+			e.text.windowID = (Uint32)windowID;
+			memcpy(e.text.text, chunk.data(), chunk.size());
+			if (SDL_PushEvent(&e) <= 0)
+			{
+				break;  // queue full or filtered; report a partial delivery
+			}
+			++pushed;
+		}
+		return pushed;
 	}
 
 	void LinuxInputTap::DispatchPending(Display* display, int menuHeight, unsigned long windowID)
@@ -512,8 +537,18 @@ namespace Rtt
 				}
 				case Command::kText:
 				{
-					PushText(cmd.arg, windowID);
-					Ack("dispatched text (%d chars)", (int)cmd.arg.size());
+					int total = 0;
+					int pushed = PushText(cmd.arg, windowID, &total);
+					if (pushed == total)
+					{
+						Ack("dispatched text (%zu codepoints, %zu bytes, %d events)",
+							cmd.count, cmd.arg.size(), total);
+					}
+					else
+					{
+						Ack("dispatched text (%zu codepoints, %zu bytes, %d of %d events)",
+							cmd.count, cmd.arg.size(), pushed, total);
+					}
 					break;
 				}
 			}
