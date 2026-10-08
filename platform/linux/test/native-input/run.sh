@@ -55,7 +55,7 @@ send "tap 160 360"           # first tap after a field
 send "tap 160 240"           # long field
 send "text abcdefghijklmnopqrstuvwxyz0123456789ABCD"   # 40 bytes: 2 events
 send "text ääääääääääääääää€x"                         # ä at byte 30, € at 32
-send "text abcdefghijklmnopqrstuvwxyzabc😀"            # emoji at byte 29
+send "text abcdefghijklmnopqrstuvwxyzabc€"            # € at bytes 29-31
 docker exec "$NAME" sh -c "printf 'text \\377\\n' > $FIFO"   # invalid UTF-8
 sleep 0.5
 send "drag 40 440 120 440 300"   # on the background, for the mouse listener
@@ -89,7 +89,8 @@ expect "40 ASCII bytes arrive whole"        "[T] long editing new=abcdefghijklmn
 expect "...in two events"                   "[INPUT] dispatched text (40 codepoints, 40 bytes, 2 events)"
 expect "2- and 3-byte chars survive a split" "[T] long editing new=ääääääääääääääää€x"
 expect "...counted as codepoints"           "[INPUT] dispatched text (18 codepoints, 36 bytes, 2 events)"
-expect "a 4-byte char survives a split"     "[T] long editing new=abcdefghijklmnopqrstuvwxyzabc😀"
+expect "a char across the 31-byte cut survives" "[T] long editing new=abcdefghijklmnopqrstuvwxyzabc€"
+expect "...and counts as one codepoint"     "[INPUT] dispatched text (30 codepoints, 32 bytes, 2 events)"
 expect "invalid UTF-8 is rejected"          "[INPUT] ignored: text (invalid UTF-8 at byte 0)"
 expect "mouse press reports the button"     "[T] mouse down primary=true"
 expect "an injected drag is a mouse drag"   "[T] mouse drag primary=true"

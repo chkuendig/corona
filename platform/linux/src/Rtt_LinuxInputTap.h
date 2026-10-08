@@ -51,7 +51,10 @@ namespace Rtt
 		// tap splits at character boundaries and pushes every piece in the
 		// same tick. Invalid UTF-8 is rejected, not repaired. Longer text is
 		// several text commands. The field's own capacity and input filters
-		// are outside what the ack can know.
+		// are outside what the ack can know. Characters above U+FFFF (emoji,
+		// for instance) reach a native text field as U+FFFD: the simulator's
+		// ImGui is built with 16-bit ImWchar, so this holds for typed input
+		// too, not only for the tap.
 		//
 		// Coordinates in tap/drag are content units — the space the project
 		// itself thinks in. Unknown or malformed lines are logged to stdout
