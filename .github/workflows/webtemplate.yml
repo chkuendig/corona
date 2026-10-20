@@ -1,0 +1,163 @@
+name: HTML5 template 2026.3736
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Reviewed full source SHA (must equal the selected workflow ref)
+        required: true
+        type: string
+      emsdk_sha256:
+        description: Reviewed SHA256 of the official e2.0.34 emsdk.tar.xz bytes
+        required: true
+        type: string
+      image_tooling_sha:
+        description: Reviewed full revision of the matching image tooling
+        required: true
+        type: string
+      baseline_template_sha256:
+        description: Verified official 3736 MSI webtemplate.zip SHA256
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webtemplate-3736
+  cancel-in-progress: false
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.4.app/Contents/Developer
+  BUILD_NUMBER: "3736"
+  YEAR: "2026"
+  MONTH: "10"
+  DAY: "12"
+  BUILD: "2026.3736"
+  SOURCE_SHA: ${{ inputs.source_sha }}
+  EMSDK_SHA256: ${{ inputs.emsdk_sha256 }}
+  IMAGE_TOOLING_SHA: ${{ inputs.image_tooling_sha }}
+  BASELINE_TEMPLATE_SHA256: ${{ inputs.baseline_template_sha256 }}
+  EMSDK_URL: https://github.com/coronalabs/emsdk/releases/download/e2.0.34/emsdk.tar.xz
+
+jobs:
+  source-code:
+    runs-on: macos-26
+    steps:
+      - name: Validate frozen dispatch inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ && "$SOURCE_SHA" == "$GITHUB_SHA" ]]
+          [[ "$IMAGE_TOOLING_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$EMSDK_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$BASELINE_TEMPLATE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          echo "SOURCE_PREP_STARTED=$(date -u +%FT%TZ)" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          submodules: recursive
+          persist-credentials: false
+      - name: Freeze source and tool inputs
+        run: |
+          git fetch --no-recurse-submodules https://github.com/coronalabs/corona.git tag 3736
+          python3 tools/GHAction/webtemplate.py freeze
+      - name: Stamp source exactly as the 3736 template job
+        run: ./tools/GHAction/process_sources.sh
+      - name: Bind the processed source archive
+        run: cd output && shasum -a 256 corona.tgz > source-SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SourceCode-3736-${{ inputs.source_sha }}
+          path: output/
+          if-no-files-found: error
+          retention-days: 30
+
+  webtemplate:
+    needs: source-code
+    runs-on: macos-26
+    env:
+      MAKEFLAGS: "-j3"
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: SourceCode-3736-${{ inputs.source_sha }}
+          path: SourceCode
+      - name: Verify and unpack processed source
+        run: |
+          set -euo pipefail
+          (cd SourceCode && shasum -a 256 -c source-SHA256SUMS)
+          mkdir engine
+          tar -xzf SourceCode/corona.tgz -C engine
+          mkdir -p "$RUNNER_TEMP/webtemplate-evidence"
+          cp SourceCode/source-SHA256SUMS "$RUNNER_TEMP/webtemplate-evidence/"
+          cp engine/webtemplate-inputs.json "$RUNNER_TEMP/webtemplate-evidence/"
+      - name: Read workflow timing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --jq '{created_at,run_started_at,updated_at,run_attempt}' \
+            > "$RUNNER_TEMP/webtemplate-evidence/run-timing.json"
+      - name: Obtain and verify the reviewed SDK distribution
+        run: |
+          set -euo pipefail
+          date -u +%FT%TZ > "$RUNNER_TEMP/webtemplate-evidence/sdk-start.txt"
+          curl --fail --location --retry 3 "$EMSDK_URL" -o "$RUNNER_TEMP/emsdk.tar.xz" \
+            --write-out '%{size_download}\n' > "$RUNNER_TEMP/webtemplate-evidence/sdk-download-bytes.txt"
+          echo "$EMSDK_SHA256  $RUNNER_TEMP/emsdk.tar.xz" | shasum -a 256 -c -
+          test "$(stat -f %z "$RUNNER_TEMP/emsdk.tar.xz")" = 238481477
+          mkdir -p "$RUNNER_TEMP/sdk"
+          tar -xf "$RUNNER_TEMP/emsdk.tar.xz" -C "$RUNNER_TEMP/sdk"
+          test -f "$RUNNER_TEMP/sdk/emsdk/emsdk_env.sh"
+          xattr -r -d com.apple.quarantine "$RUNNER_TEMP/sdk/emsdk" || true
+          date -u +%FT%TZ > "$RUNNER_TEMP/webtemplate-evidence/sdk-end.txt"
+      - name: Build one clean Release template and collect provenance
+        working-directory: engine
+        run: bash tools/GHAction/build_webtemplate.sh
+      - name: Upload version-specific template and evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: Webtemplate-3736-${{ inputs.source_sha }}
+          path: output/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Preserve incomplete build evidence
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Webtemplate-incomplete-3736-${{ inputs.source_sha }}
+          path: ${{ runner.temp }}/webtemplate-evidence/
+          if-no-files-found: warn
+          retention-days: 30
+
+  publish:
+    needs: webtemplate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Webtemplate-3736-${{ inputs.source_sha }}
+          path: output
+      - name: Publish a new content-addressed prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd output
+          sha256sum -c SHA256SUMS
+          tag="webtemplate-3736-$SOURCE_SHA"
+          # Creating the ref fails if it already exists; never move or reuse it.
+          gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+            -f "ref=refs/tags/$tag" -f "sha=$SOURCE_SHA"
+          printf '%s\n' \
+            "HTML5 Release template for engine 2026.3736 at $SOURCE_SHA." \
+            "Verify SHA256SUMS before use. Browser and native acceptance are separate." \
+            > release-notes.txt
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --verify-tag --prerelease \
+            --title "HTML5 template 2026.3736 ($SOURCE_SHA)" --notes-file release-notes.txt \
+            webtemplate-3736-*.zip manifest-3736-*.json evidence-3736-*.tgz SHA256SUMS
