@@ -94,6 +94,7 @@ namespace Rtt
 
 	EmscriptenTextBoxObject::~EmscriptenTextBoxObject()
 	{
+		fListener = NULL;
 	}
 
 #pragma endregion
@@ -303,22 +304,48 @@ namespace Rtt
 		EmscriptenTextBoxObject *o = (EmscriptenTextBoxObject *) luaL_todisplayobject(L, 1, table);
 		if (o && lua_isstring(L, 2))
 		{
-			const char* eventName = "userInput"; //lua_tostring(L, 2);
-
-			// Store callback
-			if (CoronaLuaIsListener(L, 3, eventName))
+			const char* eventName = lua_tostring(L, 2);
+			if (strcmp(eventName, "userInput") == 0)
 			{
-				o->fListener = new listener(LuaContext::GetContext(L)->LuaState(), eventName, 3);
+				// Preserve the single, last-successful-registration userInput slot.
+				if (CoronaLuaIsListener(L, 3, eventName))
+				{
+					o->fListener = new listener(LuaContext::GetContext(L)->LuaState(), eventName, 3);
+				}
+				return 0;
 			}
+
+			// Call the Lua class directly: proxy lookup would re-enter this override.
+			// DisplayObject also sets the native listener mask needed by finalize.
+			const int argumentCount = lua_gettop(L);
+			lua_getfield(L, LUA_REGISTRYINDEX, "DisplayObject");
+			if (!lua_istable(L, -1))
+			{
+				return luaL_error(L, "DisplayObject class is unavailable");
+			}
+			lua_getfield(L, -1, "addEventListener");
+			if (!lua_isfunction(L, -1))
+			{
+				return luaL_error(L, "DisplayObject.addEventListener is unavailable");
+			}
+			lua_remove(L, -2);
+			for (int i = 1; i <= argumentCount; i++)
+			{
+				lua_pushvalue(L, i);
+			}
+			lua_call(L, argumentCount, LUA_MULTRET);
+			return lua_gettop(L) - argumentCount;
 		}
 		return 0;
 	}
 
 	void EmscriptenTextBoxObject::dispatch(int eventID)
 	{
-		if (fListener && IsReachable())
+		// A callback can replace its listener or remove the field while dispatching.
+		smart_ptr<listener> active = fListener;
+		if (active && IsReachable())
 		{
-			fListener->dispatch(fElementID, eventID, GetProxy());
+			active->dispatch(fElementID, eventID, GetProxy());
 		}
 	}
 
