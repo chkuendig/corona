@@ -1,0 +1,56 @@
+name: Hash toolchain inputs
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  hash-inputs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      EMSDK_URL: https://github.com/coronalabs/emsdk/releases/download/e2.0.34/emsdk.tar.xz
+      MSI_URL: https://github.com/coronalabs/corona/releases/download/3736/Solar2D-Windows-2026.3736.msi
+      MSI_SHA256: 5a97b88f4c775507e3d5bd3f2c5f514d4313bbdeca0d4b299830095b36314d17
+    steps:
+      - name: Install msitools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends msitools
+      - name: Hash emsdk archive
+        run: |
+          curl -fL --retry 3 -o "$RUNNER_TEMP/emsdk.tar.xz" "$EMSDK_URL"
+          EMS_SIZE=$(stat -c '%s' "$RUNNER_TEMP/emsdk.tar.xz")
+          EMS_SHA=$(sha256sum "$RUNNER_TEMP/emsdk.tar.xz" | awk '{print $1}')
+          echo "EMS_SIZE=$EMS_SIZE" >> "$GITHUB_ENV"
+          echo "EMS_SHA=$EMS_SHA" >> "$GITHUB_ENV"
+          test "$EMS_SIZE" = "238481477"
+      - name: Verify installer and hash extracted template
+        run: |
+          curl -fL --retry 3 -o "$RUNNER_TEMP/solar2d.msi" "$MSI_URL"
+          echo "$MSI_SHA256  $RUNNER_TEMP/solar2d.msi" | sha256sum -c -
+          MSI_SIZE=$(stat -c '%s' "$RUNNER_TEMP/solar2d.msi")
+          mkdir "$RUNNER_TEMP/msi-extract"
+          cd "$RUNNER_TEMP/msi-extract"
+          msiextract "$RUNNER_TEMP/solar2d.msi"
+          WEBTEMPLATE=$(find . -name webtemplate.zip -print -quit)
+          test -n "$WEBTEMPLATE"
+          WT_SIZE=$(stat -c '%s' "$WEBTEMPLATE")
+          WT_SHA=$(sha256sum "$WEBTEMPLATE" | awk '{print $1}')
+          echo "MSI_SIZE=$MSI_SIZE" >> "$GITHUB_ENV"
+          echo "WT_SIZE=$WT_SIZE" >> "$GITHUB_ENV"
+          echo "WT_SHA=$WT_SHA" >> "$GITHUB_ENV"
+          test "$MSI_SIZE" = "213934080"
+      - name: Write summary
+        run: |
+          {
+            echo "## Toolchain input hashes"
+            echo ""
+            echo "| file | bytes | sha256 |"
+            echo "| --- | --- | --- |"
+            echo "| emsdk.tar.xz | $EMS_SIZE | \`$EMS_SHA\` |"
+            echo "| Solar2D-Windows-2026.3736.msi | $MSI_SIZE | \`$MSI_SHA256\` |"
+            echo "| webtemplate.zip (extracted from MSI) | $WT_SIZE | \`$WT_SHA\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
