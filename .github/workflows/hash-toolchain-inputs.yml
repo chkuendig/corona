@@ -2,6 +2,9 @@ name: Hash toolchain inputs
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - ci/hash-3736-inputs
 
 permissions:
   contents: read
