@@ -1,6 +1,9 @@
 name: HTML5 template 2026.3736
 
 on:
+  # Registers the manual workflow; every job below skips on push.
+  push:
+    branches: [ci/register-webtemplate]
   workflow_dispatch:
     inputs:
       source_sha:
@@ -42,6 +45,7 @@ env:
 
 jobs:
   source-code:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     timeout-minutes: 10
     steps:
