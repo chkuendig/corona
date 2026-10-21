@@ -46,6 +46,16 @@ jobs:
           echo "WT_SIZE=$WT_SIZE" >> "$GITHUB_ENV"
           echo "WT_SHA=$WT_SHA" >> "$GITHUB_ENV"
           test "$MSI_SIZE" = "213934080"
+      - name: List webtemplate.zip entries
+        run: |
+          WEBTEMPLATE=$(find "$RUNNER_TEMP/msi-extract" -name webtemplate.zip -print -quit)
+          {
+            echo "## webtemplate.zip entries"
+            echo ""
+            echo '```'
+            unzip -l "$WEBTEMPLATE"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Write summary
         run: |
           {
