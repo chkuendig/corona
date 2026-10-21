@@ -56,6 +56,7 @@ jobs:
             unzip -l "$WEBTEMPLATE"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          unzip -l "$WEBTEMPLATE"
       - name: Write summary
         run: |
           {
