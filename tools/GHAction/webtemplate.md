@@ -6,6 +6,21 @@ coronalabs emsdk e2.0.34 distribution, and unchanged Release flags. The date
 is fixed to 2026-10-12. It runs one clean runtime build with at most three jobs.
 It never invokes the full Daily Build workflow.
 
+Job timeouts are based on the successful upstream 3736
+[Daily Build run 38284435270](https://github.com/coronalabs/corona/actions/runs/38284435270)
+at d74923057d3fc3abad1903b61de5a459d9566363 (2026-10-12).
+The [source job](https://github.com/coronalabs/corona/actions/runs/38284435270/job/114929295081)
+took 1m54s; source-code allows 10 minutes for recursive checkout, input freezing,
+stamping and artifact transfer (8m06s margin).
+The comparable macos-26/Xcode 26.4
+[webtemplate job](https://github.com/coronalabs/corona/actions/runs/38284435270/job/114930054153)
+took 19m12s including SDK setup (17m50s in the build step); webtemplate allows
+60 minutes (40m48s margin) for the three-job build cap and added evidence work.
+The upstream [release job](https://github.com/coronalabs/corona/actions/runs/38284435270/job/114958848342)
+took 57s; publish allows 10 minutes (9m03s margin) for checksum verification,
+artifact transfer and release upload. These are elapsed job times, excluding
+the queue, and margins are allowances rather than measured fork timings.
+
 Review the exact source revision before dispatch. The full source SHA must equal
 the workflow's selected commit. Supply a reviewed SHA256 of the official SDK
 archive: its release metadata provides no digest. Obtain and review those bytes

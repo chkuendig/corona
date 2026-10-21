@@ -43,6 +43,7 @@ env:
 jobs:
   source-code:
     runs-on: macos-26
+    timeout-minutes: 10
     steps:
       - name: Validate frozen dispatch inputs
         shell: bash
@@ -77,6 +78,7 @@ jobs:
   webtemplate:
     needs: source-code
     runs-on: macos-26
+    timeout-minutes: 60
     env:
       MAKEFLAGS: "-j3"
     steps:
@@ -135,6 +137,7 @@ jobs:
   publish:
     needs: webtemplate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
