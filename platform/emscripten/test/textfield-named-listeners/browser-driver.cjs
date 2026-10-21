@@ -87,9 +87,10 @@ async function runArm(browser, address, arm) {
     if (response.url().endsWith('.bin')) result.network.push({ url: response.url(), status: response.status() });
   });
   const waitRecord = async (kind, after = 0) => {
+    const kinds = Array.isArray(kind) ? kind : [kind];
     const deadline = Date.now() + 30000;
     while (Date.now() < deadline) {
-      const record = result.records.slice(after).find(row => row.kind === kind);
+      const record = result.records.slice(after).find(row => kinds.includes(row.kind));
       if (record) return record;
       if (page.isClosed()) throw new Error('Page closed before ' + kind);
       await page.waitForTimeout(50);
@@ -140,14 +141,23 @@ async function runArm(browser, address, arm) {
     await resize(800, 1200);
     await advance();
     assert.equal((await waitRecord('removed')).sizeType, 'nil');
-    for (const [width, height] of [[960, 1440], [800, 1200], [960, 1440], [800, 1200]]) {
-      await resize(width, height);
-    }
-    // Reach the arithmetic failure before the independent finalize assertions.
-    await advance();
-    await waitRecord('named-done');
-    await resize(960, 1440);
-    if (arm === 'candidate') {
+    if (arm === 'baseline') {
+      const after = result.records.length;
+      await page.setViewportSize({ width: 960, height: 1440 });
+      // init.lua runs first; its error aborts dispatch before our resize listener.
+      const failure = await waitRecord(['runtime-error', 'resize'], after);
+      assert.equal(failure.kind, 'runtime-error', 'Official 3736 unexpectedly passed the removed-object resize');
+      assert.match(failure.message, /attempt to perform arithmetic on field ['"]size['"]/,
+        'Official 3736 must reach the real removed-object size arithmetic failure');
+      result.status = 'FAIL';
+      result.expected = true;
+    } else {
+      for (const [width, height] of [[960, 1440], [800, 1200], [960, 1440], [800, 1200]]) {
+        await resize(width, height);
+      }
+      await advance();
+      await waitRecord('named-done');
+      await resize(960, 1440);
       await advance(); await waitRecord('input-ready');
       await typeControl('function-control');
       const after = result.records.length;
@@ -164,12 +174,6 @@ async function runArm(browser, address, arm) {
       assert.equal(complete.errors, 0);
       assert.equal(result.errors.length, 0, 'All runtime error channels must stay clear');
       result.status = 'PASS';
-    } else {
-      const text = result.console.map(row => row.text).join('\n');
-      assert.match(text, /attempt to perform arithmetic on field ['"]size['"]/,
-        'Official 3736 must reach the real removed-object size arithmetic failure');
-      result.status = 'FAIL';
-      result.expected = true;
     }
   } catch (error) {
     result.status = 'ERROR';

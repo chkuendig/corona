@@ -26,11 +26,15 @@ not install dependencies. Browser flags select software WebGL; the executable
 checksum and actual browser version are recorded. Use a new directory per run.
 
 The real viewport starts at 640x960 and changes through 800x1200 and 960x1440.
-Every requested resize must produce an engine resize and a changed content scale.
+Every candidate resize must produce an engine resize and a changed content scale.
 The removed proxy must lose its size, while the live field must keep scaling
 within one pixel and preserve its font-scaling mode. Missing preconditions,
 unexpected baseline success, candidate runtime errors, failed assertions and
-timeouts return nonzero. Baseline errors stay observable throughout the burst.
+timeouts return nonzero. After removal, the baseline must record the specific
+removed-size arithmetic runtime error on the next resize. That error aborts
+dispatch before the fixture's resize listener runs; a normal resize record
+instead is an unexpected baseline pass. The expected failure is saved in
+browser.json before the candidate runs and the comparison writes result.json.
 
 An independent stage checks finalize function/table listeners, removed listeners,
 duplicate insertion/removal, table and implicit-self named listeners, native
